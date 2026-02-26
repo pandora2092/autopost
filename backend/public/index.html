@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Панель автопостинга Instagram</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Панель автопостинга Instagram</h1>
+    <nav>
+      <a href="#proxy">Прокси</a>
+      <a href="#vm">Виртуальные машины</a>
+      <a href="#profiles">Профили</a>
+      <a href="#posts">Публикации</a>
+      <a href="#queue">Очередь</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="proxy" class="card">
+      <h2>Прокси</h2>
+      <button type="button" class="btn primary" data-action="add-proxy">Добавить прокси</button>
+      <div id="proxy-list" class="list"></div>
+      <div id="proxy-form" class="form hidden">
+        <input type="text" name="host" placeholder="Хост" required>
+        <input type="number" name="port" placeholder="Порт" required>
+        <input type="text" name="login" placeholder="Логин (опц.)">
+        <input type="password" name="password" placeholder="Пароль (опц.)">
+        <button type="button" class="btn" data-action="save-proxy">Сохранить</button>
+        <button type="button" class="btn" data-action="cancel-proxy">Отмена</button>
+      </div>
+    </section>
+
+    <section id="vm" class="card">
+      <h2>Виртуальные машины</h2>
+      <button type="button" class="btn primary" data-action="add-vm">Создать VM</button>
+      <div id="vm-form" class="form hidden">
+        <input type="text" name="name" placeholder="Имя VM (латиница)" required>
+        <select name="proxy_id"><option value="">— Прокси (опц.) —</option></select>
+        <button type="button" class="btn" data-action="save-vm">Создать</button>
+        <button type="button" class="btn" data-action="cancel-vm">Отмена</button>
+      </div>
+      <div id="vm-list" class="list"></div>
+    </section>
+
+    <section id="profiles" class="card">
+      <h2>Профили (VM + Instagram)</h2>
+      <button type="button" class="btn primary" data-action="add-profile">Добавить профиль</button>
+      <div id="profile-form" class="form hidden">
+        <select name="vm_id" required><option value="">— Выберите VM —</option></select>
+        <input type="text" name="instagram_username" placeholder="Логин Instagram (опц.)">
+        <button type="button" class="btn" data-action="save-profile">Сохранить</button>
+        <button type="button" class="btn" data-action="cancel-profile">Отмена</button>
+      </div>
+      <div id="profile-list" class="list"></div>
+    </section>
+
+    <section id="posts" class="card">
+      <h2>Запланированные публикации</h2>
+      <button type="button" class="btn primary" data-action="add-post">Добавить пост</button>
+      <div id="post-form" class="form hidden">
+        <select name="profile_id" required><option value="">— Профиль —</option></select>
+        <input type="text" name="media_path" placeholder="Путь к медиа на сервере" required>
+        <input type="text" name="caption" placeholder="Подпись (опц.)">
+        <input type="datetime-local" name="scheduled_at">
+        <button type="button" class="btn" data-action="save-post">Добавить</button>
+        <button type="button" class="btn" data-action="cancel-post">Отмена</button>
+      </div>
+      <div id="post-list" class="list"></div>
+    </section>
+
+    <section id="queue" class="card">
+      <h2>Очередь и статистика</h2>
+      <div id="queue-stats" class="stats"></div>
+      <div id="queue-pending" class="list"></div>
+      <div id="queue-recent" class="list"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

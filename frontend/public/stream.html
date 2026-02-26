@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Экран устройства</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #1a1b26; color: #c0caf5; padding: 2rem; max-width: 600px; margin: 0 auto; }
+    h1 { font-size: 1.25rem; }
+    code { background: #24283b; padding: 0.2rem 0.5rem; border-radius: 4px; }
+    .cmd { background: #24283b; padding: 1rem; border-radius: 8px; margin: 1rem 0; word-break: break-all; }
+    button { background: #7aa2f7; color: #1a1b26; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; }
+    button:hover { filter: brightness(1.1); }
+    a { color: #7aa2f7; }
+  </style>
+</head>
+<body>
+  <h1>Просмотр экрана Android</h1>
+  <p>Чтобы видеть экран VM в браузере, установите <strong>scrcpy</strong> на компьютер и подключитесь к устройству.</p>
+  <p>Команда для подключения (скопируйте и выполните в терминале):</p>
+  <div class="cmd" id="cmd"></div>
+  <button type="button" id="copy">Копировать команду</button>
+  <p id="copy-msg" style="display:none;color:#9ece6a;">Скопировано.</p>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const adb = params.get('adb');
+    const cmdEl = document.getElementById('cmd');
+    const copyBtn = document.getElementById('copy');
+    const copyMsg = document.getElementById('copy-msg');
+    if (adb) {
+      const cmd = 'scrcpy -s ' + adb;
+      cmdEl.textContent = cmd;
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(cmd).then(() => {
+          copyMsg.style.display = 'block';
+          setTimeout(() => { copyMsg.style.display = 'none'; }, 2000);
+        });
+      };
+    } else {
+      cmdEl.textContent = 'Не передан параметр adb. Откройте экран из карточки профиля.';
+      copyBtn.style.display = 'none';
+    }
+  </script>
+</body>
+</html>

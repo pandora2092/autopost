@@ -1,0 +1,21 @@
+{
+  "name": "instagram-autopost-backend",
+  "version": "1.0.0",
+  "description": "Backend for Instagram auto-posting system (VM pool, scheduling, queue)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "init-db": "node src/db/init.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "uuid": "^10.0.0"
+  }
+}

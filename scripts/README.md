@@ -1,0 +1,61 @@
+# Скрипты управления Android VM
+
+## clone-vm.sh
+
+Клонирует VM из шаблона с уникальным MAC-адресом и новым диском (qcow2 copy-on-write).
+
+**Использование:**
+```bash
+./clone-vm.sh <имя_шаблона> <имя_новой_VM> [MAC]
+```
+
+Пример:
+```bash
+./clone-vm.sh android-template instagram-vm-01
+# MAC сгенерируется автоматически. Или:
+./clone-vm.sh android-template instagram-vm-01 52:54:00:aa:bb:cc
+```
+
+**Требования:** `virsh`, `qemu-img`. Для доступа к libvirt может потребоваться `sudo` или членство в группе `libvirt`.
+
+**Переменные окружения:** `VM_DISK_POOL` (пул libvirt, по умолчанию `default`).
+
+После создания VM запустите её (`virsh start <имя>`) и при необходимости выполните `set-android-id.sh` по IP VM (ADB over network).
+
+---
+
+## set-android-id.sh
+
+Устанавливает уникальный Android ID на устройстве через ADB (снижает риск блокировок Instagram при клонировании).
+
+**Использование:**
+```bash
+./set-android-id.sh <IP:port> [android_id]
+```
+
+Пример (VM с ADB на 5555):
+```bash
+adb connect 192.168.122.5:5555   # один раз
+./set-android-id.sh 192.168.122.5:5555
+# или задать свой ID:
+./set-android-id.sh 192.168.122.5:5555 a1b2c3d4e5f67890
+```
+
+На устройстве обычно нужны root-права для `settings put secure android_id`.
+
+---
+
+## apply-proxy.sh
+
+Генерирует конфиг redsocks и при наличии `ADB_TARGET` может отправить его на устройство.
+
+**Использование:**
+```bash
+# Только вывести конфиг:
+./apply-proxy.sh --stdout socks5 proxy.example.com 1080 [login] [password]
+
+# Сгенерировать и при необходимости отправить на устройство:
+ADB_TARGET=192.168.122.5:5555 ./apply-proxy.sh socks5 proxy.example.com 1080
+```
+
+Типы: `socks5`, `socks4`, `http-connect`. На VM нужно перезапустить redsocks с новым конфигом.

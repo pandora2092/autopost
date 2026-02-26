@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+
+# Build / output
+dist
+*.local
+
+# Data and uploads
+backend/data
+backend-nest/data
+backend-nest/uploads
+backend/uploads
+
+# Logs and env
+*.log
+.env
+.env.*
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
