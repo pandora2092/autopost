@@ -1,3 +1,5 @@
+import { getPostStatusLabel } from '../api';
+
 export default function QueueSection({ queue, stats }) {
   return (
     <section className="card">
@@ -13,7 +15,7 @@ export default function QueueSection({ queue, stats }) {
               <div key={p.id} className="list-item">
                 <span>{p.instagram_username || p.profile_id}</span>
                 <span>{new Date(p.scheduled_at).toLocaleString()}</span>
-                <span className={`status ${p.status}`}>{p.status}</span>
+                <span className={`status ${p.status}`}>{getPostStatusLabel(p.status)}</span>
               </div>
             ))
           : <p className="muted">Нет постов в очереди</p>}

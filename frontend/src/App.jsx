@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { proxyApi, vmApi, profilesApi, postsApi, systemApi } from './api';
 import ProxySection from './components/ProxySection';
 import VmSection from './components/VmSection';
@@ -8,8 +9,15 @@ import QueueSection from './components/QueueSection';
 import Toast from './components/Toast';
 import './App.css';
 
+const nav = [
+  { id: 'proxy', path: '/proxy', label: 'Прокси' },
+  { id: 'vm', path: '/vm', label: 'Виртуальные машины' },
+  { id: 'profiles', path: '/profiles', label: 'Профили' },
+  { id: 'posts', path: '/posts', label: 'Публикации' },
+  { id: 'queue', path: '/queue', label: 'Очередь' },
+];
+
 function App() {
-  const [section, setSection] = useState('proxy');
   const [toast, setToast] = useState({ text: '', type: '' });
   const [proxies, setProxies] = useState([]);
   const [vms, setVms] = useState([]);
@@ -82,40 +90,27 @@ function App() {
     return () => clearInterval(t);
   }, []);
 
-  const nav = [
-    { id: 'proxy', label: 'Прокси' },
-    { id: 'vm', label: 'Виртуальные машины' },
-    { id: 'profiles', label: 'Профили' },
-    { id: 'posts', label: 'Публикации' },
-    { id: 'queue', label: 'Очередь' },
-  ];
-
   return (
     <>
       <header>
         <h1>Панель автопостинга Instagram</h1>
         <nav>
-          {nav.map(({ id, label }) => (
-            <a key={id} href={'#' + id} onClick={(e) => { e.preventDefault(); setSection(id); }} className={section === id ? 'active' : ''}>
+          {nav.map(({ id, path, label }) => (
+            <NavLink key={id} to={path} className={({ isActive }) => (isActive ? 'active' : '')}>
               {label}
-            </a>
+            </NavLink>
           ))}
         </nav>
       </header>
       <main>
-        {section === 'proxy' && (
-          <ProxySection proxies={proxies} onSave={loadProxies} onDelete={loadProxies} showToast={showToast} />
-        )}
-        {section === 'vm' && (
-          <VmSection vms={vms} proxies={proxies} onSave={loadVms} onDelete={() => { loadVms(); loadProfiles(); }} showToast={showToast} />
-        )}
-        {section === 'profiles' && (
-          <ProfilesSection profiles={profiles} vms={vms} onSave={loadProfiles} onDelete={() => { loadProfiles(); loadPosts(); }} showToast={showToast} />
-        )}
-        {section === 'posts' && (
-          <PostsSection posts={posts} profiles={profiles} onSave={() => { loadPosts(); loadQueue(); }} onCancel={() => { loadPosts(); loadQueue(); }} showToast={showToast} />
-        )}
-        {section === 'queue' && <QueueSection queue={queue} stats={stats} />}
+        <Routes>
+          <Route path="/" element={<Navigate to="/proxy" replace />} />
+          <Route path="/proxy" element={<ProxySection proxies={proxies} onSave={loadProxies} onDelete={loadProxies} showToast={showToast} />} />
+          <Route path="/vm" element={<VmSection vms={vms} proxies={proxies} onSave={loadVms} onDelete={() => { loadVms(); loadProfiles(); }} showToast={showToast} />} />
+          <Route path="/profiles" element={<ProfilesSection profiles={profiles} vms={vms} onSave={loadProfiles} onDelete={() => { loadProfiles(); loadPosts(); }} showToast={showToast} />} />
+          <Route path="/posts" element={<PostsSection posts={posts} profiles={profiles} onSave={() => { loadPosts(); loadQueue(); }} onCancel={() => { loadPosts(); loadQueue(); }} showToast={showToast} />} />
+          <Route path="/queue" element={<QueueSection queue={queue} stats={stats} />} />
+        </Routes>
       </main>
       <Toast text={toast.text} type={toast.type} />
     </>

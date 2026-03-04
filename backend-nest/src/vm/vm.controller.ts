@@ -50,4 +50,15 @@ export class VmController {
   setAndroidId(@Param('id') id: string, @Body() body: { android_id?: string }) {
     return this.vmService.setAndroidId(id, body.android_id);
   }
+
+  @Post(':id/install-instagram')
+  installInstagram(@Param('id') id: string, @Body() body: { apk_path?: string }) {
+    return this.vmService.installInstagram(id, body.apk_path);
+  }
+
+  @Post(':id/apply-proxy')
+  applyProxy(@Param('id') id: string) {
+    this.vmService.applyProxy(id);
+    return { ok: true };
+  }
 }

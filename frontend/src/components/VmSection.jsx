@@ -5,8 +5,6 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [proxyId, setProxyId] = useState('');
-  const [editingAdb, setEditingAdb] = useState(null);
-  const [adbValue, setAdbValue] = useState('');
 
   const handleSave = async () => {
     if (!name?.trim()) {
@@ -38,7 +36,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const handleStop = async (id) => {
     try {
       await vmApi.stop(id);
-      showToast('VM останавливается');
+      showToast('VM остановлена');
       onSave();
     } catch (e) {
       showToast(e.message, 'error');
@@ -48,22 +46,24 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const handleGetIp = async (id) => {
     try {
       const r = await vmApi.getIp(id, true);
-      if (r.ip) {
-        showToast(`IP: ${r.ip}, ADB сохранён: ${r.adb_address}`, 'success');
-      } else {
+      if (!r.ip) {
         showToast('IP не получен. Запустите VM и подождите загрузки сети.', 'error');
+        onSave();
+        return;
       }
+      await vmApi.setAndroidId(id);
+      showToast(`IP и Android ID установлены: ${r.adb_address}`, 'success');
       onSave();
     } catch (e) {
       showToast(e.message, 'error');
+      onSave();
     }
   };
 
-  const handleSetAndroidId = async (id) => {
+  const handleInstallInstagram = async (id) => {
     try {
-      const r = await vmApi.setAndroidId(id);
-      showToast('Android ID: ' + r.android_id, 'success');
-      onSave();
+      await vmApi.installInstagram(id);
+      showToast('Instagram установлен для VM', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -78,29 +78,6 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
     } catch (e) {
       showToast(e.message, 'error');
     }
-  };
-
-  const handleSetAdb = async (id) => {
-    const val = (editingAdb === id ? adbValue : '').trim();
-    if (!val) {
-      setEditingAdb(null);
-      setAdbValue('');
-      return;
-    }
-    try {
-      await vmApi.update(id, { adb_address: val });
-      showToast('ADB-адрес сохранён', 'success');
-      setEditingAdb(null);
-      setAdbValue('');
-      onSave();
-    } catch (e) {
-      showToast(e.message, 'error');
-    }
-  };
-
-  const startEditAdb = (vm) => {
-    setEditingAdb(vm.id);
-    setAdbValue(vm.adb_address || '');
   };
 
   return (
@@ -126,32 +103,13 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
             <span><strong>{v.name}</strong></span>
             <span className={`status ${v.status}`}>{v.status}</span>
             <span className="id">MAC: {v.mac || '—'}</span>
-            {editingAdb === v.id ? (
-              <>
-                <input
-                  type="text"
-                  placeholder="IP:5555"
-                  value={adbValue}
-                  onChange={(e) => setAdbValue(e.target.value)}
-                  className="adb-input"
-                />
-                <button type="button" className="btn small" onClick={() => handleSetAdb(v.id)}>Сохранить ADB</button>
-                <button type="button" className="btn small" onClick={() => { setEditingAdb(null); setAdbValue(''); }}>Отмена</button>
-              </>
-            ) : (
-              <>
-                {v.adb_address ? <span>ADB: {v.adb_address}</span> : null}
-                <button type="button" className="btn small" onClick={() => handleGetIp(v.id)} title="Узнать IP VM и сохранить как ADB (нужно запустить VM)">
-                  Узнать IP
-                </button>
-                <button type="button" className="btn small" onClick={() => startEditAdb(v)} title="Ввести ADB вручную">
-                  {v.adb_address ? 'Изм. ADB' : 'Ввод ADB'}
-                </button>
-              </>
-            )}
+            {v.adb_address ? <span>ADB: {v.adb_address}</span> : null}
+            <button type="button" className="btn small" onClick={() => handleGetIp(v.id)} title="Узнать IP VM и сохранить как ADB (нужно запустить VM)">
+              Узнать IP
+            </button>
             <button type="button" className="btn small" onClick={() => handleStart(v.id)}>Старт</button>
             <button type="button" className="btn small" onClick={() => handleStop(v.id)}>Стоп</button>
-            <button type="button" className="btn small" onClick={() => handleSetAndroidId(v.id)}>Set Android ID</button>
+            <button type="button" className="btn small" onClick={() => handleInstallInstagram(v.id)}>Установить Instagram</button>
             <button type="button" className="btn small danger" onClick={() => handleDelete(v.id)}>Удалить</button>
           </div>
         ))}

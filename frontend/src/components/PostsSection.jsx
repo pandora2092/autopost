@@ -1,5 +1,24 @@
 import { useState, useRef } from 'react';
-import { postsApi, uploadApi } from '../api';
+import { postsApi, uploadApi, getPostStatusLabel } from '../api';
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function formatDateTimeLocalValue(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function dateTimeLocalToISOString(value) {
+  if (!value) return undefined;
+  const [datePart, timePartRaw] = value.split('T');
+  if (!datePart || !timePartRaw) return undefined;
+  const [y, m, d] = datePart.split('-').map((x) => parseInt(x, 10));
+  const [hh, mm, ss] = timePartRaw.split(':').map((x) => parseInt(x, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d) || !Number.isFinite(hh) || !Number.isFinite(mm)) return undefined;
+  const dt = new Date(y, m - 1, d, hh, mm, Number.isFinite(ss) ? ss : 0, 0);
+  return dt.toISOString();
+}
 
 export default function PostsSection({ posts, profiles, onSave, onCancel, showToast }) {
   const [showForm, setShowForm] = useState(false);
@@ -12,7 +31,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
   const [scheduledAt, setScheduledAt] = useState(() => {
     const d = new Date();
     d.setMinutes(d.getMinutes() + 10);
-    return d.toISOString().slice(0, 16);
+    return formatDateTimeLocalValue(d);
   });
 
   const handleFileChange = async (e) => {
@@ -47,7 +66,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
         profile_id: profileId,
         media_path: mediaPath,
         caption: caption || undefined,
-        scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        scheduled_at: dateTimeLocalToISOString(scheduledAt),
       });
       showToast('Пост добавлен в очередь', 'success');
       setShowForm(false);
@@ -71,10 +90,24 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
     }
   };
 
+  const handleClear = async () => {
+    if (!window.confirm('Удалить все записи из базы данных? Это действие нельзя отменить.')) return;
+    try {
+      const { deleted } = await postsApi.clearAll();
+      showToast(`Удалено записей: ${deleted}`, 'success');
+      onCancel();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   return (
     <section className="card">
       <h2>Запланированные публикации</h2>
-      <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить пост</button>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить пост</button>
+        <button type="button" className="btn danger" onClick={handleClear} disabled={posts.length === 0}>Очистить</button>
+      </div>
       {showForm && (
         <div className="form form-column">
           <select value={profileId} onChange={(e) => setProfileId(e.target.value)} required>
@@ -98,7 +131,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             {selectedFile && <span className="form-upload-name">{selectedFile}</span>}
           </div>
           <input type="text" placeholder="Или путь к медиа на сервере" value={mediaPath} onChange={(e) => setMediaPath(e.target.value)} />
-          <input type="text" placeholder="Подпись (опц.)" value={caption} onChange={(e) => setCaption(e.target.value)} />
+          <textarea placeholder="Подпись (опц.)" value={caption} onChange={(e) => setCaption(e.target.value)} rows={4} />
           <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
           <button type="button" className="btn" onClick={handleSave} disabled={uploading}>Добавить</button>
           <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
@@ -110,7 +143,10 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             <span><strong>{p.instagram_username || p.profile_id}</strong></span>
             <span>{p.media_path}</span>
             <span>{new Date(p.scheduled_at).toLocaleString()}</span>
-            <span className={`status ${p.status}`}>{p.status}</span>
+            <span className={`status ${p.status}`}>{getPostStatusLabel(p.status)}</span>
+            {p.status === 'failed' && p.error_message && (
+              <span className="error-message" title={p.error_message}>{p.error_message}</span>
+            )}
             {p.status === 'pending' && (
               <button type="button" className="btn small danger" onClick={() => handleCancel(p.id)}>Отменить</button>
             )}

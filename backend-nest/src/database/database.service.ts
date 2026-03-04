@@ -63,7 +63,7 @@ export class DatabaseService implements OnModuleInit {
         media_path TEXT NOT NULL,
         caption TEXT,
         scheduled_at TEXT NOT NULL,
-        status TEXT DEFAULT 'pending' CHECK(status IN ('pending','assigned','publishing','published','failed','cancelled')),
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending','assigned','publishing','published','simulated','failed','cancelled')),
         assigned_at TEXT,
         published_at TEXT,
         error_message TEXT,
@@ -83,6 +83,34 @@ export class DatabaseService implements OnModuleInit {
       CREATE INDEX IF NOT EXISTS idx_profile_vm ON profile(vm_id);
       CREATE INDEX IF NOT EXISTS idx_scheduled_status_at ON scheduled_post(status, scheduled_at);
       CREATE INDEX IF NOT EXISTS idx_scheduled_profile ON scheduled_post(profile_id);
+      CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
+    `);
+    this.migrateScheduledPostSimulatedStatus(db);
+  }
+
+  private migrateScheduledPostSimulatedStatus(db: Database.Database): void {
+    const exists = db.prepare("SELECT 1 FROM _migrations WHERE name = ?").get('scheduled_post_simulated_status');
+    if (exists) return;
+    db.exec(`
+      CREATE TABLE scheduled_post_new (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+        media_path TEXT NOT NULL,
+        caption TEXT,
+        scheduled_at TEXT NOT NULL,
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending','assigned','publishing','published','simulated','failed','cancelled')),
+        assigned_at TEXT,
+        published_at TEXT,
+        error_message TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO scheduled_post_new SELECT * FROM scheduled_post;
+      DROP TABLE scheduled_post;
+      ALTER TABLE scheduled_post_new RENAME TO scheduled_post;
+      CREATE INDEX IF NOT EXISTS idx_scheduled_status_at ON scheduled_post(status, scheduled_at);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_profile ON scheduled_post(profile_id);
+      INSERT INTO _migrations (name) VALUES ('scheduled_post_simulated_status');
     `);
   }
 }

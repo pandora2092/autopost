@@ -4,19 +4,22 @@
 # adb_target: IP:port (например 192.168.122.5:5555) или serial.
 # Если android_id не задан — генерируется случайный 16-символьный hex.
 
-set -euo pipefail
+set -euo
 
 ADB_TARGET="${1:?Usage: $0 <adb_target> [android_id]}"
 ANDROID_ID="${2:-}"
 
 generate_android_id() {
-  # Android ID — 16 hex-символов (64 bit), обычно без ведущих нулей в строке
-  printf '%016x' $((RANDOM * 65536 + RANDOM)) $((RANDOM * 65536 + RANDOM))
+  # Android ID — 16 hex-символов. Генерируем из /dev/urandom.
+  LC_ALL=C tr -dc '0-9a-f' </dev/urandom | head -c 16
 }
 
 if [[ -z "$ANDROID_ID" ]]; then
   ANDROID_ID=$(generate_android_id)
 fi
+
+# На всякий случай убираем лишние символы (пробелы, переносы, префиксы)
+ANDROID_ID="${ANDROID_ID//[^0-9a-fA-F]/}"
 
 # Проверка формата (hex, до 16 символов)
 if ! [[ "$ANDROID_ID" =~ ^[0-9a-fA-F]{1,16}$ ]]; then
@@ -34,8 +37,9 @@ if ! command -v adb &>/dev/null; then
   exit 1
 fi
 
-# Одна команда: отключить от других устройств, подключиться к целевому
-export ADB_SERVER_SOCKET="" 2>/dev/null || true
+# Одна команда: отключить от других устройств, подключиться к целевому.
+# Здесь тоже очищаем ADB_SERVER_SOCKET, чтобы adb не пытался ходить к "левому" демону.
+unset ADB_SERVER_SOCKET 2>/dev/null || true
 adb disconnect &>/dev/null || true
 adb connect "$ADB_TARGET" 2>/dev/null || true
 sleep 1

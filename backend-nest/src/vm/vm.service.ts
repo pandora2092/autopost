@@ -22,13 +22,22 @@ export class VmService {
   ) {}
 
   findAll() {
-    return this.db.getDb()
-      .prepare(
-        `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.created_at,
-                p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port
-         FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id ORDER BY v.created_at DESC`,
-      )
-      .all();
+    const db = this.db.getDb();
+    const rows = db.prepare(
+      `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.created_at,
+              p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port
+       FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id ORDER BY v.created_at DESC`,
+    ).all() as { id: string; libvirt_domain: string; status: string }[];
+    for (const v of rows) {
+      if (v.libvirt_domain && v.status !== 'creating' && v.status !== 'error') {
+        const real = this.vmManager.getDomainState(v.libvirt_domain);
+        if (real !== v.status) {
+          db.prepare('UPDATE vm SET status = ? WHERE id = ?').run(real, v.id);
+          (v as { status: string }).status = real;
+        }
+      }
+    }
+    return rows;
   }
 
   findOne(id: string) {
@@ -74,19 +83,34 @@ export class VmService {
   }
 
   start(id: string) {
-    const vm = this.db.getDb().prepare('SELECT id, libvirt_domain FROM vm WHERE id = ?').get(id) as { id: string; libvirt_domain: string } | undefined;
+    const vm = this.db.getDb()
+      .prepare('SELECT id, libvirt_domain, proxy_id FROM vm WHERE id = ?')
+      .get(id) as { id: string; libvirt_domain: string; proxy_id: string | null } | undefined;
     if (!vm) throw new NotFoundException('VM не найдена');
     this.vmManager.startVm(vm.libvirt_domain);
-    this.db.getDb().prepare('UPDATE vm SET status = ? WHERE id = ?').run('running', id);
+    this.db.getDb().prepare("UPDATE vm SET status = ?, updated_at = datetime('now') WHERE id = ?").run('running', id);
+    this.vmManager.startVmAndWaitReady(vm.libvirt_domain).then(
+      ({ adb_address }) => {
+        this.db.getDb().prepare("UPDATE vm SET adb_address = ?, updated_at = datetime('now') WHERE id = ?").run(adb_address, id);
+        if (vm.proxy_id) {
+          const proxy = this.db.getDb()
+            .prepare('SELECT type, host, port, login, password FROM proxy WHERE id = ?')
+            .get(vm.proxy_id) as { type: string; host: string; port: number; login: string | null; password: string | null } | undefined;
+          if (proxy) this.vmManager.applyProxy(adb_address, proxy);
+        }
+      },
+      () => {},
+    );
     return { status: 'running' };
   }
 
   stop(id: string) {
     const vm = this.db.getDb().prepare('SELECT id, libvirt_domain FROM vm WHERE id = ?').get(id) as { id: string; libvirt_domain: string } | undefined;
     if (!vm) throw new NotFoundException('VM не найдена');
-    this.vmManager.stopVm(vm.libvirt_domain);
-    this.db.getDb().prepare('UPDATE vm SET status = ? WHERE id = ?').run('stopped', id);
-    return { status: 'stopped' };
+    this.vmManager.forceStopVm(vm.libvirt_domain);
+    const real = this.vmManager.getDomainState(vm.libvirt_domain);
+    this.db.getDb().prepare('UPDATE vm SET status = ? WHERE id = ?').run(real, id);
+    return { status: real };
   }
 
   remove(id: string) {
@@ -106,8 +130,60 @@ export class VmService {
     }
     if (!adbAddress) throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
     const { android_id } = this.vmManager.setAndroidId(adbAddress, androidId ?? null);
+    this.vmManager.setBuildFingerprint(adbAddress);
     this.db.getDb().prepare('UPDATE vm SET android_id = ?, adb_address = ? WHERE id = ?').run(android_id, adbAddress, id);
     return { android_id, adb_address: adbAddress };
+  }
+
+  installInstagram(id: string, apkPath?: string) {
+    const vm = this.db.getDb()
+      .prepare('SELECT id, adb_address, libvirt_domain FROM vm WHERE id = ?')
+      .get(id) as { id: string; adb_address: string | null; libvirt_domain: string } | undefined;
+    if (!vm) throw new NotFoundException('VM не найдена');
+    let adbAddress = vm.adb_address;
+    if (!adbAddress) {
+      const ip = this.vmManager.getVmIp(vm.libvirt_domain);
+      if (ip) adbAddress = `${ip}:5555`;
+    }
+    if (!adbAddress) {
+      throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
+    }
+    const { output } = this.vmManager.installInstagram(adbAddress, apkPath);
+    return { ok: true, adb_address: adbAddress, output };
+  }
+
+  /** Применить прокси на устройстве VM (загрузка redsocks.conf по ADB). Трафик на устройстве пойдёт через прокси. */
+  applyProxy(id: string): void {
+    const vm = this.db.getDb()
+      .prepare(
+        `SELECT v.adb_address, v.libvirt_domain, v.proxy_id, p.type, p.host, p.port, p.login, p.password
+         FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id WHERE v.id = ?`,
+      )
+      .get(id) as {
+        adb_address: string | null;
+        libvirt_domain: string;
+        proxy_id: string | null;
+        type: string | null;
+        host: string | null;
+        port: number | null;
+        login: string | null;
+        password: string | null;
+      } | undefined;
+    if (!vm) throw new NotFoundException('VM не найдена');
+    if (!vm.proxy_id || !vm.host) throw new Error('У VM не задан прокси');
+    let adbAddress = vm.adb_address;
+    if (!adbAddress) {
+      const ip = this.vmManager.getVmIp(vm.libvirt_domain);
+      adbAddress = ip ? `${ip}:5555` : null;
+    }
+    if (!adbAddress) throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
+    this.vmManager.applyProxy(adbAddress, {
+      type: vm.type!,
+      host: vm.host!,
+      port: vm.port!,
+      login: vm.login,
+      password: vm.password,
+    });
   }
 
   /** Получить IP VM через virsh domifaddr и при желании сохранить как adb_address. */

@@ -1,17 +1,30 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { PublisherService } from './publisher.service';
+import { VmManagerService } from '../vm/vm-manager.service';
 import * as cron from 'node-cron';
 
-const MAX_POSTS_PER_DAY = parseInt(process.env.MAX_POSTS_PER_DAY || '3', 10);
-const MIN_INTERVAL_HOURS = parseFloat(process.env.MIN_INTERVAL_HOURS || '4');
+const MAX_POSTS_PER_DAY = parseInt(process.env.MAX_POSTS_PER_DAY || '10', 10);
+const MIN_INTERVAL_HOURS = parseFloat(process.env.MIN_INTERVAL_HOURS || '0');
 const CRON_SCHEDULE = process.env.SCHEDULER_CRON || '* * * * *';
+
+interface PostRow {
+  id: string;
+  profile_id: string;
+  media_path: string;
+  caption: string | null;
+  scheduled_at: string;
+  vm_id: string;
+  libvirt_domain: string;
+  vm_status: string;
+}
 
 @Injectable()
 export class SchedulerService implements OnModuleInit {
   constructor(
     private readonly db: DatabaseService,
     private readonly publisher: PublisherService,
+    private readonly vmManager: VmManagerService,
   ) {}
 
   onModuleInit() {
@@ -53,33 +66,87 @@ export class SchedulerService implements OnModuleInit {
     return diffHours >= MIN_INTERVAL_HOURS;
   }
 
-  private pickPostsToPublish() {
+  /**
+   * Для каждой VM из списка постов: если VM не running — запускает и ждёт готовности, обновляет БД.
+   * При таймауте ping (VM зависла) — принудительно останавливает, пауза, повторный запуск. Возвращает true, если VM готова.
+   */
+  private async ensureVmRunning(vmId: string, libvirtDomain: string): Promise<boolean> {
+    const db = this.db.getDb();
+    const row = db.prepare('SELECT id, status FROM vm WHERE id = ?').get(vmId) as { id: string; status: string } | undefined;
+    if (!row) return false;
+    if (row.status === 'running') return true;
+    const restartDelayMs = parseInt(process.env.VM_RESTART_DELAY_MS || '8000', 10);
+    const tryStart = async (): Promise<{ adb_address: string } | null> => {
+      try {
+        return await this.vmManager.startVmAndWaitReady(libvirtDomain);
+      } catch {
+        return null;
+      }
+    };
+    let result = await tryStart();
+    if (!result) {
+      console.warn('Scheduler: VM', libvirtDomain, 'ping timeout, forcing restart...');
+      this.vmManager.forceStopVm(libvirtDomain);
+      await new Promise((r) => setTimeout(r, restartDelayMs));
+      result = await tryStart();
+    }
+    if (result) {
+      db.prepare("UPDATE vm SET status = ?, adb_address = ?, updated_at = datetime('now') WHERE id = ?").run('running', result.adb_address, vmId);
+      return true;
+    }
+    console.error('Scheduler: failed to start VM', vmId, 'after restart');
+    return false;
+  }
+
+  /**
+   * Выбирает посты для публикации (scheduled_at <= now, pending). Для постов с выключенной VM
+   * запускает VM и ждёт готовности; посты с VM, которую не удалось запустить, остаются pending.
+   */
+  private async pickPostsToPublish(): Promise<PostRow[]> {
     const now = new Date().toISOString();
     const rows = this.db.getDb()
       .prepare(
-        `SELECT id, profile_id, media_path, caption, scheduled_at
-         FROM scheduled_post WHERE status = 'pending' AND scheduled_at <= ? ORDER BY scheduled_at ASC`,
+        `SELECT s.id, s.profile_id, s.media_path, s.caption, s.scheduled_at,
+                v.id AS vm_id, v.libvirt_domain, v.status AS vm_status
+         FROM scheduled_post s
+         JOIN profile pr ON pr.id = s.profile_id
+         JOIN vm v ON v.id = pr.vm_id
+         WHERE s.status = 'pending' AND s.scheduled_at <= ?
+         ORDER BY s.scheduled_at ASC`,
       )
-      .all(now) as { id: string; profile_id: string; media_path: string; caption: string | null; scheduled_at: string }[];
-    return rows.filter((row) => this.canPublishNow(row.profile_id));
+      .all(now) as PostRow[];
+    const byProfile = rows.filter((row) => this.canPublishNow(row.profile_id));
+    const byVm = new Map<string, PostRow[]>();
+    for (const row of byProfile) {
+      const list = byVm.get(row.vm_id) ?? [];
+      list.push(row);
+      byVm.set(row.vm_id, list);
+    }
+    const result: PostRow[] = [];
+    for (const [, postList] of byVm) {
+      const first = postList[0];
+      const ok = first.vm_status === 'running' || (await this.ensureVmRunning(first.vm_id, first.libvirt_domain));
+      if (ok) result.push(...postList);
+    }
+    return result;
   }
 
   private assignPost(postId: string) {
     this.db.getDb()
       .prepare(
-        'UPDATE scheduled_post SET status = ?, assigned_at = datetime("now"), updated_at = datetime("now") WHERE id = ?',
+        "UPDATE scheduled_post SET status = ?, assigned_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
       )
       .run('assigned', postId);
   }
 
-  runTick() {
-    const toPublish = this.pickPostsToPublish();
+  async runTick() {
+    const toPublish = await this.pickPostsToPublish();
     for (const post of toPublish) {
       this.assignPost(post.id);
       this.publisher.enqueue(post).catch((err: unknown) => {
         this.db.getDb()
           .prepare(
-            'UPDATE scheduled_post SET status = ?, error_message = ?, updated_at = datetime("now") WHERE id = ?',
+            "UPDATE scheduled_post SET status = ?, error_message = ?, updated_at = datetime('now') WHERE id = ?",
           )
           .run('failed', (err as Error)?.message || String(err), post.id);
       });

@@ -115,13 +115,18 @@ main {
 }
 
 .form input,
-.form select {
+.form select,
+.form textarea {
   padding: 0.5rem;
   border: 1px solid var(--muted);
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
   min-width: 120px;
+}
+
+.form textarea {
+  resize: vertical;
 }
 
 .form.form-column {
@@ -140,11 +145,6 @@ main {
   color: var(--muted);
 }
 
-.vm-row .adb-input {
-  width: 140px;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.85rem;
-}
 
 .list {
   display: flex;
@@ -193,9 +193,23 @@ main {
   color: var(--bg);
 }
 
+.list-item .status.simulated {
+  background: var(--muted);
+  color: var(--text);
+}
+
 .list-item .status.failed {
   background: var(--danger);
   color: #fff;
+}
+
+.list-item .error-message {
+  font-size: 0.85rem;
+  color: var(--danger);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stats {

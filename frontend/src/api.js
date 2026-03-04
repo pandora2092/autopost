@@ -1,5 +1,19 @@
 const API = '/api';
 
+export const POST_STATUS_LABELS = {
+  pending: 'Ожидает',
+  assigned: 'Назначен',
+  publishing: 'Публикуется',
+  published: 'Опубликован',
+  simulated: 'Симуляция',
+  failed: 'Ошибка',
+  cancelled: 'Отменён',
+};
+
+export function getPostStatusLabel(status) {
+  return POST_STATUS_LABELS[status] ?? status;
+}
+
 async function request(path, options = {}) {
   const res = await fetch(API + path, {
     headers: { 'Content-Type': 'application/json', ...options.headers },
@@ -12,7 +26,13 @@ async function request(path, options = {}) {
   } catch (_) {
     data = text;
   }
-  if (!res.ok) throw new Error(data?.error || data || res.statusText);
+  if (!res.ok) {
+    if (data && typeof data === 'object') {
+      const msg = data.error || data.message || JSON.stringify(data);
+      throw new Error(msg);
+    }
+    throw new Error(data || res.statusText);
+  }
   if (res.status === 204) return null;
   return data;
 }
@@ -35,6 +55,7 @@ export const vmApi = {
   stop: (id) => request(`/vm/${id}/stop`, { method: 'POST' }),
   setAndroidId: (id) => request(`/vm/${id}/set-android-id`, { method: 'POST', body: JSON.stringify({}) }),
   getIp: (id, save = true) => request(`/vm/${id}/ip?save=${save ? '1' : '0'}`),
+  installInstagram: (id) => request(`/vm/${id}/install-instagram`, { method: 'POST', body: JSON.stringify({}) }),
 };
 
 export const profilesApi = {
@@ -72,6 +93,7 @@ export const postsApi = {
   create: (body) => request('/posts', { method: 'POST', body: JSON.stringify(body) }),
   update: (id, body) => request(`/posts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   cancel: (id) => request(`/posts/${id}`, { method: 'DELETE' }),
+  clearAll: () => request('/posts', { method: 'DELETE' }),
 };
 
 export const systemApi = {

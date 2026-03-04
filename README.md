@@ -8,15 +8,7 @@
 - Шаблонная VM: Android (например Bliss OS), настроенный ADB over network (порт 5555)
 - Node.js 18+
 
-## Варианты запуска
-
-**Рекомендуемый (NestJS + React):** бэкенд в `backend-nest/`, фронтенд в `frontend/`. API тот же, БД общая (SQLite).
-
-**Классический (Express + статика):** один сервер в `backend/` с панелью в `backend/public/` — см. раздел «Бэкенд Express» ниже.
-
----
-
-## Запуск: NestJS + React
+## Запуск
 
 ### 1. Скрипты клонирования VM
 
@@ -55,21 +47,6 @@ npm run dev
 
 Для продакшена: `npm run build` в frontend, затем раздавать `frontend/dist` через nginx или подмонтировать в Nest (статическая папка).
 
----
-
-## Бэкенд Express (альтернатива)
-
-```bash
-cd backend
-npm install
-npm run init-db
-export VM_TEMPLATE_DOMAIN=android-template
-export PORT=3000
-npm start
-```
-
-Панель: http://localhost:3000 (статический HTML из backend/public).
-
 ### 4. Прокси и VM из панели
 
 - В разделе «Прокси» добавьте прокси (socks5/socks4/http-connect).
@@ -93,13 +70,15 @@ npm start
 
 ### 7. Реальная публикация (Appium)
 
-По умолчанию посты помечаются как «опубликованные» после симуляции (для проверки очереди). Для реальной публикации в приложении Instagram:
+По умолчанию посты помечаются как «Симуляция» (проверка очереди без публикации). Для реальной публикации в приложении Instagram:
 
-- Установите Appium и WebdriverIO: `npm install webdriverio @wdio/appium-service` (в backend).
-- Запустите Appium server и укажите на устройство по ADB.
-- Задайте `USE_APPIUM=1` и при необходимости доработайте `backend/src/services/appiumPublish.js` под вашу версию Instagram (селекторы кнопок и полей).
+- В `backend-nest` уже есть зависимость `webdriverio`. Appium server запустите отдельно и привяжите к устройству по ADB.
+- **В среде, где запущен Appium**, должны быть заданы переменные Android SDK: `ANDROID_HOME` или `ANDROID_SDK_ROOT` (путь к Android SDK). Иначе при создании сессии появится ошибка: «Neither ANDROID_HOME nor ANDROID_SDK_ROOT environment variable was exported».
+- Переменные: `USE_APPIUM=1`, при необходимости `APPIUM_HOST=127.0.0.1`, `APPIUM_PORT=4723`.
+- Сервис публикации: загрузка медиа на устройство (adb push), подключение к Appium (WebdriverIO), запуск Instagram, кнопка «Новая запись», подпись. При смене версии Instagram может потребоваться поправить селекторы в `backend-nest/src/scheduler/appium-publish.service.ts`.
+- Если в VM видео не проигрывается в галерее и кнопка «Поделиться» неактивна — см. [docs/video-format-vm.md](docs/video-format-vm.md) (формат H.264, медиа-сканер). Рекомендуемые сборки Android для VM (Instagram + кодеки): [docs/android-vm-builds.md](docs/android-vm-builds.md).
 
-Медиа для поста должны лежать в `backend/uploads/` или по абсолютному пути в `media_path`.
+Медиа для поста должны лежать в `backend-nest/uploads/` или по абсолютному пути в `media_path`.
 
 ## API (кратко)
 
@@ -113,6 +92,5 @@ npm start
 ## Структура
 
 - `scripts/` — bash-скрипты клонирования VM, установки Android ID, генерации конфига redsocks
-- `backend-nest/` — бэкенд NestJS (TypeScript), SQLite, те же API и логика (VM, прокси, профили, посты, планировщик)
+- `backend-nest/` — бэкенд NestJS (TypeScript), SQLite, API (VM, прокси, профили, посты, планировщик)
 - `frontend/` — React (Vite), панель: Прокси, VM, Профили, Публикации, Очередь
-- `backend/` — вариант на Express + статическая панель в `backend/public/`

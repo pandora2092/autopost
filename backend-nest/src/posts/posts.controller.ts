@@ -25,6 +25,11 @@ export class PostsController {
     return this.postsService.update(id, dto);
   }
 
+  @Delete()
+  clearAll() {
+    return this.postsService.clearAll();
+  }
+
   @Delete(':id')
   cancel(@Param('id') id: string) {
     return this.postsService.cancel(id);

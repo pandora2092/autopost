@@ -72,11 +72,11 @@ export class PostsService {
     this.findOne(id);
     const db = this.db.getDb();
     if (dto.status !== undefined)
-      db.prepare('UPDATE scheduled_post SET status = ?, updated_at = datetime("now") WHERE id = ?').run(dto.status, id);
+      db.prepare("UPDATE scheduled_post SET status = ?, updated_at = datetime('now') WHERE id = ?").run(dto.status, id);
     if (dto.scheduled_at !== undefined)
-      db.prepare('UPDATE scheduled_post SET scheduled_at = ?, updated_at = datetime("now") WHERE id = ?').run(dto.scheduled_at, id);
+      db.prepare("UPDATE scheduled_post SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(dto.scheduled_at, id);
     if (dto.caption !== undefined)
-      db.prepare('UPDATE scheduled_post SET caption = ?, updated_at = datetime("now") WHERE id = ?').run(dto.caption, id);
+      db.prepare("UPDATE scheduled_post SET caption = ?, updated_at = datetime('now') WHERE id = ?").run(dto.caption, id);
     return this.findOne(id);
   }
 
@@ -84,5 +84,11 @@ export class PostsService {
     const r = this.db.getDb().prepare('UPDATE scheduled_post SET status = ? WHERE id = ?').run('cancelled', id);
     if (r.changes === 0) throw new NotFoundException('Пост не найден');
     return { status: 'cancelled' };
+  }
+
+  clearAll(): { deleted: number } {
+    const db = this.db.getDb();
+    const r = db.prepare('DELETE FROM scheduled_post').run();
+    return { deleted: r.changes };
   }
 }
