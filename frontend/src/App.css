@@ -73,6 +73,13 @@ main {
   color: var(--accent);
 }
 
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
 .btn {
   padding: 0.5rem 1rem;
   border: none;
@@ -100,6 +107,16 @@ main {
 .btn.small {
   padding: 0.25rem 0.5rem;
   font-size: 0.8rem;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.btn:disabled:hover {
+  filter: none;
 }
 
 .form {
@@ -203,6 +220,16 @@ main {
   color: #fff;
 }
 
+.list-item .vm-proxy-select {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  min-width: 100px;
+}
+
 .list-item .error-message {
   font-size: 0.85rem;
   color: var(--danger);
@@ -244,4 +271,121 @@ main {
 
 .toast.success {
   border-left: 4px solid var(--success);
+}
+
+/* Loader */
+.loader-spinner {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid var(--muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -0.15em;
+  margin-right: 0.3em;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--muted);
+  animation: modalSlide 0.25s ease;
+}
+
+@keyframes modalSlide {
+  from {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.15rem;
+  color: var(--text);
+}
+
+.modal-vm-name {
+  margin: 0 0 1rem 0;
+  font-size: 0.95rem;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.config-result-modal .config-result-list {
+  margin: 0 0 1.25rem 0;
+  padding-left: 1.25rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.config-result-modal .config-result-list li {
+  margin-bottom: 0.35rem;
+}
+
+/* Delete confirm modal */
+.delete-confirm-modal {
+  text-align: center;
+}
+
+.delete-confirm-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1rem;
+  background: rgba(247, 118, 142, 0.15);
+  border: 2px solid var(--danger);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.75rem;
+  color: var(--danger);
+}
+
+.delete-confirm-modal h3 {
+  margin-bottom: 0.25rem;
+}
+
+.delete-confirm-warning {
+  margin: 0 0 1.25rem 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
 }

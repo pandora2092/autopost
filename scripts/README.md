@@ -68,18 +68,21 @@ export INSTAGRAM_APK=/opt/apk/instagram.apk
 
 ## apply-proxy.sh
 
-Генерирует конфиг redsocks и при наличии `ADB_TARGET` может отправить его на устройство.
+Генерирует конфиг redsocks и при наличии `ADB_TARGET` может отправить его на устройство и/или запустить redsocks.
 
 **Использование:**
 ```bash
 # Только вывести конфиг:
 ./apply-proxy.sh --stdout socks5 proxy.example.com 1080 [login] [password]
 
-# Сгенерировать и при необходимости отправить на устройство:
+# Сгенерировать, отправить на устройство и запустить redsocks (например, при «Узнать IP»):
 ADB_TARGET=192.168.122.5:5555 ./apply-proxy.sh socks5 proxy.example.com 1080
+
+# Только запустить start-redsocks.sh на устройстве (конфиг уже на устройстве; при старте VM и перед публикацией):
+ADB_TARGET=192.168.122.5:5555 ./apply-proxy.sh --run-only
 ```
 
-Типы: `socks5`, `socks4`, `http-connect`. На VM нужно перезапустить redsocks с новым конфигом.
+Типы: `socks5`, `socks4`, `http-connect`. Панель загружает конфиг один раз (при «Узнать IP»), затем только запускает redsocks при старте VM и перед публикацией.
 
 ---
 

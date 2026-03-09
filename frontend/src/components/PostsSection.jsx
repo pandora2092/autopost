@@ -28,6 +28,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
   const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
+  const [clearConfirmPopup, setClearConfirmPopup] = useState(false);
   const [scheduledAt, setScheduledAt] = useState(() => {
     const d = new Date();
     d.setMinutes(d.getMinutes() + 10);
@@ -90,8 +91,12 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
     }
   };
 
-  const handleClear = async () => {
-    if (!window.confirm('Удалить все записи из базы данных? Это действие нельзя отменить.')) return;
+  const handleClearClick = () => {
+    setClearConfirmPopup(true);
+  };
+
+  const handleClearConfirm = async () => {
+    setClearConfirmPopup(false);
     try {
       const { deleted } = await postsApi.clearAll();
       showToast(`Удалено записей: ${deleted}`, 'success');
@@ -101,12 +106,16 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
     }
   };
 
+  const handleClearCancel = () => {
+    setClearConfirmPopup(false);
+  };
+
   return (
     <section className="card">
       <h2>Запланированные публикации</h2>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+      <div className="card-actions">
         <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить пост</button>
-        <button type="button" className="btn danger" onClick={handleClear} disabled={posts.length === 0}>Очистить</button>
+        <button type="button" className="btn danger" onClick={handleClearClick} disabled={posts.length === 0}>Очистить публикации</button>
       </div>
       {showForm && (
         <div className="form form-column">
@@ -153,6 +162,22 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
           </div>
         ))}
       </div>
+
+      {clearConfirmPopup && (
+        <div className="modal-overlay" onClick={handleClearCancel}>
+          <div className="modal delete-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-confirm-icon">⚠</div>
+            <h3>Очистить публикации?</h3>
+            <p className="delete-confirm-warning">
+              Все записи будут удалены из базы данных. Это действие нельзя отменить.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={handleClearCancel}>Отмена</button>
+              <button type="button" className="btn danger" onClick={handleClearConfirm}>Очистить</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

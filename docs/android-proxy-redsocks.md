@@ -56,7 +56,7 @@ base {
   redirector = iptables;
 }
 redsocks {
-  local_ip = 127.0.0.1;
+  local_ip = 0.0.0.0;
   local_port = 12345;
   type = socks5;
   ip = proxy.example.com;

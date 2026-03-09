@@ -66,7 +66,10 @@ export class ProxyService {
   }
 
   remove(id: string) {
-    const r = this.db.getDb().prepare('DELETE FROM proxy WHERE id = ?').run(id);
+    this.findOne(id);
+    const db = this.db.getDb();
+    db.prepare('UPDATE vm SET proxy_id = NULL WHERE proxy_id = ?').run(id);
+    const r = db.prepare('DELETE FROM proxy WHERE id = ?').run(id);
     if (r.changes === 0) throw new NotFoundException('Прокси не найден');
   }
 }

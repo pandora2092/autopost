@@ -57,8 +57,8 @@ export class VmController {
   }
 
   @Post(':id/apply-proxy')
-  applyProxy(@Param('id') id: string) {
-    this.vmService.applyProxy(id);
+  applyProxy(@Param('id') id: string, @Body() body?: { pushConfig?: boolean }) {
+    this.vmService.applyProxy(id, body?.pushConfig === true);
     return { ok: true };
   }
 }

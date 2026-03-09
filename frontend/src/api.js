@@ -56,6 +56,8 @@ export const vmApi = {
   setAndroidId: (id) => request(`/vm/${id}/set-android-id`, { method: 'POST', body: JSON.stringify({}) }),
   getIp: (id, save = true) => request(`/vm/${id}/ip?save=${save ? '1' : '0'}`),
   installInstagram: (id) => request(`/vm/${id}/install-instagram`, { method: 'POST', body: JSON.stringify({}) }),
+  applyProxy: (id, pushConfig = false) =>
+    request(`/vm/${id}/apply-proxy`, { method: 'POST', body: JSON.stringify({ pushConfig }) }),
 };
 
 export const profilesApi = {

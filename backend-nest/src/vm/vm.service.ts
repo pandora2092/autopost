@@ -24,7 +24,7 @@ export class VmService {
   findAll() {
     const db = this.db.getDb();
     const rows = db.prepare(
-      `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.created_at,
+      `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.instagram_installed, v.created_at,
               p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port
        FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id ORDER BY v.created_at DESC`,
     ).all() as { id: string; libvirt_domain: string; status: string }[];
@@ -149,11 +149,12 @@ export class VmService {
       throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
     }
     const { output } = this.vmManager.installInstagram(adbAddress, apkPath);
+    this.db.getDb().prepare('UPDATE vm SET instagram_installed = 1 WHERE id = ?').run(id);
     return { ok: true, adb_address: adbAddress, output };
   }
 
   /** Применить прокси на устройстве VM (загрузка redsocks.conf по ADB). Трафик на устройстве пойдёт через прокси. */
-  applyProxy(id: string): void {
+  applyProxy(id: string, pushConfig = false): void {
     const vm = this.db.getDb()
       .prepare(
         `SELECT v.adb_address, v.libvirt_domain, v.proxy_id, p.type, p.host, p.port, p.login, p.password
@@ -177,23 +178,51 @@ export class VmService {
       adbAddress = ip ? `${ip}:5555` : null;
     }
     if (!adbAddress) throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
-    this.vmManager.applyProxy(adbAddress, {
-      type: vm.type!,
-      host: vm.host!,
-      port: vm.port!,
-      login: vm.login,
-      password: vm.password,
-    });
+    this.vmManager.applyProxy(
+      adbAddress,
+      {
+        type: vm.type!,
+        host: vm.host!,
+        port: vm.port!,
+        login: vm.login,
+        password: vm.password,
+      },
+      { pushConfig },
+    );
   }
 
-  /** Получить IP VM через virsh domifaddr и при желании сохранить как adb_address. */
+  /** Получить IP VM через virsh domifaddr и при желании сохранить как adb_address. При saveAdb=true и наличии прокси — раз загружает конфиг на устройство и запускает redsocks. */
   getVmIp(id: string, saveAdb = false): { ip: string | null; adb_address: string | null } {
-    const vm = this.db.getDb().prepare('SELECT id, adb_address, libvirt_domain FROM vm WHERE id = ?').get(id) as { id: string; adb_address: string | null; libvirt_domain: string } | undefined;
+    const vm = this.db.getDb()
+      .prepare(
+        `SELECT v.id, v.adb_address, v.libvirt_domain, v.proxy_id, p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port, p.login AS proxy_login, p.password AS proxy_password
+         FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id WHERE v.id = ?`,
+      )
+      .get(id) as {
+        adb_address: string | null;
+        libvirt_domain: string;
+        proxy_id: string | null;
+        proxy_type: string | null;
+        proxy_host: string | null;
+        proxy_port: number | null;
+        proxy_login: string | null;
+        proxy_password: string | null;
+      } | undefined;
     if (!vm) throw new NotFoundException('VM не найдена');
     const ip = this.vmManager.getVmIp(vm.libvirt_domain);
     const adb_address = ip ? `${ip}:5555` : null;
     if (saveAdb && adb_address) {
       this.db.getDb().prepare('UPDATE vm SET adb_address = ? WHERE id = ?').run(adb_address, id);
+      if (vm.proxy_id && vm.proxy_type != null && vm.proxy_host != null && vm.proxy_port != null) {
+        this.vmManager.adbConnect(adb_address);
+        this.vmManager.applyProxy(adb_address, {
+          type: vm.proxy_type,
+          host: vm.proxy_host,
+          port: vm.proxy_port,
+          login: vm.proxy_login ?? undefined,
+          password: vm.proxy_password ?? undefined,
+        }, { pushConfig: true });
+      }
     }
     return { ip: ip ?? null, adb_address: adb_address ?? vm.adb_address };
   }

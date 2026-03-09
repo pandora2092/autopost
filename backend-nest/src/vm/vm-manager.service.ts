@@ -183,28 +183,35 @@ export class VmManagerService {
   }
 
   /**
-   * Применяет прокси на устройстве: загружает конфиг redsocks через apply-proxy.sh.
-   * На устройстве должен быть запущен redsocks с чтением конфига из /data/local/tmp/redsocks.conf
-   * и настроен iptables redirect. Тогда весь трафик (в т.ч. браузер) пойдёт через прокси.
+   * Применяет прокси на устройстве.
+   * - pushConfig=true: загружает redsocks.conf на устройство и запускает start-redsocks.sh (один раз, напр. при «Узнать IP»).
+   * - pushConfig=false/undefined: только запускает start-redsocks.sh (конфиг уже на устройстве; при старте VM и перед публикацией).
    */
   applyProxy(
     adbAddress: string,
     proxy: { type: string; host: string; port: number; login?: string | null; password?: string | null },
+    options?: { pushConfig?: boolean },
   ): void {
     const script = path.join(this.scriptsDir, 'apply-proxy.sh');
     if (!fs.existsSync(script)) {
       console.warn('apply-proxy.sh не найден, прокси не применён');
       return;
     }
-    const type = proxy.type === 'http' ? 'http-connect' : proxy.type;
-    const args = [type, proxy.host, String(proxy.port)];
-    if (proxy.login) args.push(proxy.login);
-    if (proxy.password) args.push(proxy.password);
+    const env = { ...process.env, ADB_TARGET: adbAddress };
+    let args: string[];
+    if (options?.pushConfig === true) {
+      const type = proxy.type === 'http' ? 'http-connect' : proxy.type;
+      args = [type, proxy.host, String(proxy.port)];
+      if (proxy.login) args.push(proxy.login);
+      if (proxy.password) args.push(proxy.password);
+    } else {
+      args = ['--run-only'];
+    }
     try {
       const result = spawnSync(script, args, {
         encoding: 'utf8',
         timeout: 30000,
-        env: { ...process.env, ADB_TARGET: adbAddress },
+        env,
         cwd: this.scriptsDir,
       });
       if (result.status !== 0) {

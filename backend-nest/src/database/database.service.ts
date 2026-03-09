@@ -86,6 +86,16 @@ export class DatabaseService implements OnModuleInit {
       CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
     `);
     this.migrateScheduledPostSimulatedStatus(db);
+    this.migrateVmInstagramInstalled(db);
+  }
+
+  private migrateVmInstagramInstalled(db: Database.Database): void {
+    const exists = db.prepare("SELECT 1 FROM _migrations WHERE name = ?").get('vm_instagram_installed');
+    if (exists) return;
+    db.exec(`
+      ALTER TABLE vm ADD COLUMN instagram_installed INTEGER DEFAULT 0;
+      INSERT INTO _migrations (name) VALUES ('vm_instagram_installed');
+    `);
   }
 
   private migrateScheduledPostSimulatedStatus(db: Database.Database): void {

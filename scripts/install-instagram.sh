@@ -5,26 +5,27 @@
 # индивидуально для каждой VM по её ADB-адресу.
 #
 # Использование:
-#   ./install-instagram.sh <adb_target> [apk_path]
+#   ./install-instagram.sh <adb_target> [apk_path_or_dir]
 #   adb_target: IP:port (например 192.168.122.5:5555) или serial.
-#   apk_path: путь к APK Instagram. Если не указан, берётся из $INSTAGRAM_APK.
+#   apk_path_or_dir: один APK или каталог с bundle (base.apk + split_*.apk). По умолчанию $INSTAGRAM_APK.
 #
-# Пример:
+# Примеры:
 #   INSTAGRAM_APK=/opt/apk/instagram.apk ./install-instagram.sh 192.168.122.5:5555
+#   INSTAGRAM_APK=/opt/apk/instagram-bundle ./install-instagram.sh 192.168.122.5:5555   # каталог с base.apk и split_*.apk
 #
 
 set -euo pipefail
 
-ADB_TARGET="${1:?Usage: $0 <adb_target> [apk_path]}"
+ADB_TARGET="${1:?Usage: $0 <adb_target> [apk_path_or_dir]}"
 APK_PATH="${2:-${INSTAGRAM_APK:-}}"
 
 if [[ -z "${APK_PATH}" ]]; then
-  echo "Ошибка: не указан путь к APK. Передайте вторым аргументом или задайте переменную окружения INSTAGRAM_APK." >&2
+  echo "Ошибка: не указан путь к APK или каталог. Передайте вторым аргументом или задайте переменную окружения INSTAGRAM_APK." >&2
   exit 1
 fi
 
-if [[ ! -f "${APK_PATH}" ]]; then
-  echo "Ошибка: APK не найден по пути: ${APK_PATH}" >&2
+if [[ ! -f "${APK_PATH}" && ! -d "${APK_PATH}" ]]; then
+  echo "Ошибка: не найден файл или каталог: ${APK_PATH}" >&2
   exit 1
 fi
 
@@ -42,11 +43,38 @@ adb connect "${ADB_TARGET}" 2>/dev/null || true
 sleep 1
 
 INSTAGRAM_PKG="com.instagram.android"
-echo "Установка Instagram из ${APK_PATH} на ${ADB_TARGET}..."
 INSTALL_OUT=$(mktemp)
 trap 'rm -f "$INSTALL_OUT"' EXIT
+
+# Один APK или bundle (каталог с base.apk и split_*.apk)
+if [[ -d "${APK_PATH}" ]]; then
+  BASE_APK="${APK_PATH}/base.apk"
+  if [[ ! -f "$BASE_APK" ]]; then
+    echo "Ошибка: в каталоге ${APK_PATH} нет base.apk" >&2
+    exit 1
+  fi
+  APK_FILES=("$BASE_APK")
+  for f in "${APK_PATH}"/*.apk; do
+    [[ -f "$f" && "$(basename "$f")" != "base.apk" ]] && APK_FILES+=("$f")
+  done
+  USE_INSTALL_MULTIPLE=1
+  echo "Установка Instagram (bundle: ${#APK_FILES[@]} APK) из ${APK_PATH} на ${ADB_TARGET}..."
+else
+  APK_FILES=("${APK_PATH}")
+  USE_INSTALL_MULTIPLE=0
+  echo "Установка Instagram из ${APK_PATH} на ${ADB_TARGET}..."
+fi
+
+do_install() {
+  if (( USE_INSTALL_MULTIPLE )); then
+    adb -s "${ADB_TARGET}" install-multiple "${APK_FILES[@]}"
+  else
+    adb -s "${ADB_TARGET}" install -r "${APK_FILES[0]}"
+  fi
+}
+
 set +e
-adb -s "${ADB_TARGET}" install -r "${APK_PATH}" 2>&1 | tee "$INSTALL_OUT"
+do_install 2>&1 | tee "$INSTALL_OUT"
 ADB_EXIT=${PIPESTATUS[0]}
 set -e
 if [[ $ADB_EXIT -ne 0 ]]; then
@@ -54,18 +82,21 @@ if [[ $ADB_EXIT -ne 0 ]]; then
     echo "Ошибка проверки подписи. Удаляю предыдущую версию (если есть) и ставлю заново..."
     adb -s "${ADB_TARGET}" uninstall "${INSTAGRAM_PKG}" 2>/dev/null || true
     set +e
-    adb -s "${ADB_TARGET}" install "${APK_PATH}" 2>&1 | tee "$INSTALL_OUT"
+    if (( USE_INSTALL_MULTIPLE )); then
+      adb -s "${ADB_TARGET}" install-multiple "${APK_FILES[@]}" 2>&1 | tee "$INSTALL_OUT"
+    else
+      adb -s "${ADB_TARGET}" install "${APK_FILES[0]}" 2>&1 | tee "$INSTALL_OUT"
+    fi
     ADB_EXIT=${PIPESTATUS[0]}
     set -e
-    if [[ $ADB_EXIT -ne 0 ]] && grep -q "INSTALL_FAILED_VERIFICATION_FAILURE" "$INSTALL_OUT"; then
-      echo "" >&2
-      echo "Установка заблокирована проверкой на устройстве (часто при первой установке)." >&2
-      echo "На VM отключите: Настройки → Google → Безопасность → Защита Play (Play Protect)," >&2
-      echo "или: Настройки → Безопасность → «Проверка приложений» / Verify apps." >&2
-      echo "После отключения снова нажмите «Установить Instagram»." >&2
-      exit 1
-    fi
     if [[ $ADB_EXIT -ne 0 ]]; then
+      if grep -q "INSTALL_FAILED_VERIFICATION_FAILURE" "$INSTALL_OUT" 2>/dev/null; then
+        echo "" >&2
+        echo "Установка заблокирована проверкой на устройстве (часто при первой установке)." >&2
+        echo "На VM отключите: Настройки → Google → Безопасность → Защита Play (Play Protect)," >&2
+        echo "или: Настройки → Безопасность → «Проверка приложений» / Verify apps." >&2
+        echo "После отключения снова нажмите «Установить Instagram»." >&2
+      fi
       cat "$INSTALL_OUT" >&2
       exit 1
     fi

@@ -1,18 +1,41 @@
 #!/usr/bin/env bash
 # Генерация конфига redsocks и (опционально) загрузка на устройство через ADB.
-# Использование: ./apply-proxy.sh <proxy_type> <proxy_host> <proxy_port> [login] [password]
-# Или для вывода только конфига: ./apply-proxy.sh --stdout socks5 127.0.0.1 1080
+# Использование:
+#   ./apply-proxy.sh <proxy_type> <proxy_host> <proxy_port> [login] [password]  — пушить конфиг и запустить redsocks
+#   ./apply-proxy.sh --run-only   — только запустить start-redsocks.sh (конфиг уже на устройстве)
+#   ./apply-proxy.sh --stdout socks5 127.0.0.1 1080   — вывести конфиг в stdout
 # proxy_type: socks5 | socks4 | http-connect
 
 set -euo pipefail
 
+RUN_ONLY=false
 STDOUT=false
-if [[ "${1:-}" == "--stdout" ]]; then
+if [[ "${1:-}" == "--run-only" ]]; then
+  RUN_ONLY=true
+  shift
+elif [[ "${1:-}" == "--stdout" ]]; then
   STDOUT=true
   shift
 fi
 
-PROXY_TYPE="${1:?Usage: $0 [--stdout] <socks5|socks4|http-connect> <host> <port> [login] [password]}"
+if [[ "$RUN_ONLY" == true ]]; then
+  ADB_TARGET="${ADB_TARGET:?При --run-only нужна переменная ADB_TARGET}"
+  if command -v adb &>/dev/null; then
+    echo "Запуск redsocks на $ADB_TARGET..."
+    if adb -s "$ADB_TARGET" shell "su -c '/data/local/tmp/start-redsocks.sh'" 2>/dev/null; then
+      echo "Прокси применён (redsocks запущен)."
+    else
+      echo "Запуск start-redsocks.sh не удался (скрипт должен быть в /data/local/tmp/)." >&2
+      exit 1
+    fi
+  else
+    echo "adb не найден." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+PROXY_TYPE="${1:?Usage: $0 [--stdout|--run-only] <socks5|socks4|http-connect> <host> <port> [login] [password]}"
 PROXY_HOST="${2:?}"
 PROXY_PORT="${3:?}"
 PROXY_LOGIN="${4:-}"
@@ -31,7 +54,7 @@ REDSOCKS_CONF="base {
   redirector = iptables;
 }
 redsocks {
-  local_ip = 127.0.0.1;
+  local_ip = 0.0.0.0;
   local_port = 12345;
   type = $PROXY_TYPE;
   ip = $PROXY_HOST;
@@ -63,7 +86,12 @@ if [[ -n "$ADB_TARGET" ]] && command -v adb &>/dev/null; then
     cat "$CONF_FILE"
     exit 1
   }
-  echo "Конфиг загружен на $ADB_TARGET ( /data/local/tmp/redsocks.conf или /sdcard/redsocks.conf ). Перезапустите redsocks на устройстве с этим конфигом."
+  echo "Конфиг загружен на $ADB_TARGET. Запуск redsocks на устройстве..."
+  if adb -s "$ADB_TARGET" shell "su -c '/data/local/tmp/start-redsocks.sh'" 2>/dev/null; then
+    echo "Прокси применён (redsocks запущен)."
+  else
+    echo "Запуск start-redsocks.sh на устройстве не удался (скрипт должен быть в /data/local/tmp/). Трафик пойдёт через прокси после ручного запуска или перезагрузки VM с Magisk." >&2
+  fi
 else
   echo "Конфиг redsocks (сохраните в /etc/redsocks.conf или передайте на VM вручную):"
   cat "$CONF_FILE"
