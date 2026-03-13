@@ -80,6 +80,23 @@ main {
   margin-bottom: 1rem;
 }
 
+.card-actions-with-meta {
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.card-actions-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.disk-space {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .btn {
   padding: 0.5rem 1rem;
   border: none;
@@ -142,6 +159,11 @@ main {
   min-width: 120px;
 }
 
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.9;
+}
+
 .form textarea {
   resize: vertical;
 }
@@ -149,6 +171,68 @@ main {
 .form.form-column {
   flex-direction: column;
   align-items: flex-start;
+}
+
+/* Post form — карточка добавления поста */
+.post-form.card-inner {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--muted);
+}
+
+.post-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.post-form-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.post-form-input-wide {
+  width: 100%;
+  max-width: 560px;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.post-form-input-wide:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.post-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.post-form select,
+.post-form input[type="datetime-local"] {
+  max-width: 320px;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.post-form .form-upload {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .form-upload {
@@ -167,6 +251,105 @@ main {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Post list cards */
+.post-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.post-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+}
+
+.post-card:hover {
+  border-color: var(--muted);
+}
+
+.post-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.post-card .status {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.post-card .status.published {
+  background: var(--success);
+  color: var(--bg);
+}
+
+.post-card .status.publishing,
+.post-card .status.assigned {
+  background: var(--warning);
+  color: var(--bg);
+}
+
+.post-card .status.pending {
+  background: var(--muted);
+  color: var(--text);
+}
+
+.post-card .status.failed {
+  background: var(--danger);
+  color: #fff;
+}
+
+.post-card .status.cancelled {
+  background: var(--muted);
+  color: var(--text);
+}
+
+.post-card-profile {
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.post-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.post-meta-item {
+  font-size: 0.85rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.post-meta-date {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.post-card-error {
+  font-size: 0.85rem;
+  color: var(--danger);
+  background: rgba(247, 118, 142, 0.1);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.post-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  padding-top: 0.25rem;
 }
 
 .list-item {
@@ -200,6 +383,16 @@ main {
   background: var(--muted);
 }
 
+.list-item .status.authorized {
+  background: var(--success);
+  color: var(--bg);
+}
+
+.list-item .status.not-authorized {
+  background: var(--muted);
+  color: var(--text);
+}
+
 .list-item .status.pending {
   background: var(--warning);
   color: var(--bg);
@@ -208,11 +401,6 @@ main {
 .list-item .status.published {
   background: var(--success);
   color: var(--bg);
-}
-
-.list-item .status.simulated {
-  background: var(--muted);
-  color: var(--text);
 }
 
 .list-item .status.failed {
@@ -228,6 +416,139 @@ main {
   background: var(--bg);
   color: var(--text);
   min-width: 100px;
+}
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--muted);
+}
+
+.pagination-info {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.pagination-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pagination-buttons .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* VM cards — многострочный удобный layout */
+.vm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.vm-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid transparent;
+}
+
+.vm-card:hover {
+  border-color: var(--muted);
+}
+
+.vm-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.vm-card-header .status {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.vm-card-header .status.running {
+  background: var(--success);
+  color: var(--bg);
+}
+
+.vm-card-header .status.stopped {
+  background: var(--muted);
+  color: var(--text);
+}
+
+.vm-card-header .status.creating {
+  background: var(--warning);
+  color: var(--bg);
+}
+
+.vm-card-header .status.error {
+  background: var(--danger);
+  color: #fff;
+}
+
+.vm-card-name {
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.vm-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.vm-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.vm-card-proxy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.vm-proxy-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.vm-card .vm-proxy-select {
+  min-width: 140px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.vm-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding-top: 0.25rem;
+}
+
+.vm-actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
 }
 
 .list-item .error-message {
@@ -247,6 +568,84 @@ main {
 }
 
 .stats span {
+  color: var(--muted);
+}
+
+.stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.stats-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stats-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.stats-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.stats-posts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stats-post-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.stats-badge {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  background: var(--muted);
+  color: var(--text);
+}
+
+.stats-badge.status-published {
+  background: var(--success);
+  color: var(--bg);
+}
+
+.stats-badge.status-publishing,
+.stats-badge.status-assigned {
+  background: var(--warning);
+  color: var(--bg);
+}
+
+.stats-badge.status-pending {
+  background: var(--muted);
+  color: var(--text);
+}
+
+.stats-badge.status-failed {
+  background: var(--danger);
+  color: #fff;
+}
+
+.stats-badge.status-cancelled {
+  background: var(--muted);
+  color: var(--text);
+}
+
+.stats-muted {
+  font-size: 0.9rem;
   color: var(--muted);
 }
 
@@ -343,6 +742,49 @@ main {
   font-weight: 500;
 }
 
+.modal input[type="datetime-local"] {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.retry-post-modal {
+  max-width: 480px;
+}
+
+.retry-post-info {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.retry-post-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.9rem;
+}
+
+.retry-post-row:not(.retry-post-error) .retry-post-value {
+  word-break: break-all;
+}
+
+.retry-post-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.retry-post-error .error-message {
+  font-size: 0.85rem;
+  max-width: 100%;
+}
+
 .config-result-modal .config-result-list {
   margin: 0 0 1.25rem 0;
   padding-left: 1.25rem;
@@ -357,6 +799,37 @@ main {
 /* Delete confirm modal */
 .delete-confirm-modal {
   text-align: center;
+}
+
+.install-instagram-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1rem;
+  background: rgba(122, 162, 247, 0.15);
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: var(--accent);
+}
+
+.proxy-apply-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.proxy-apply-loading .loader-spinner {
+  flex-shrink: 0;
+}
+
+.proxy-apply-loading p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .delete-confirm-icon {

@@ -39,8 +39,9 @@ export class UploadController {
       },
     }),
   )
-  upload(@UploadedFile() file: Express.Multer.File | undefined) {
+  async upload(@UploadedFile() file: Express.Multer.File | undefined) {
     if (!file) throw new BadRequestException('Выберите файл MP4');
+    await this.uploadService.ensureFaststart(file.path);
     const relativePath = this.uploadService.toRelativePath(file.path);
     return { path: relativePath };
   }

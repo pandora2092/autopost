@@ -25,7 +25,7 @@ if [[ "$RUN_ONLY" == true ]]; then
     if adb -s "$ADB_TARGET" shell "su -c '/data/local/tmp/start-redsocks.sh'" 2>/dev/null; then
       echo "Прокси применён (redsocks запущен)."
     else
-      echo "Запуск start-redsocks.sh не удался (скрипт должен быть в /data/local/tmp/)." >&2
+      echo "Запуск start-redsocks.sh не удался (скрипт и бинарь redsocks должны быть в /data/local/tmp/ на устройстве, например загружены в шаблон VM)." >&2
       exit 1
     fi
   else
@@ -79,18 +79,19 @@ trap 'rm -f "$CONF_FILE"' EXIT
 echo "$REDSOCKS_CONF" > "$CONF_FILE"
 
 if [[ -n "$ADB_TARGET" ]] && command -v adb &>/dev/null; then
-  adb -s "$ADB_TARGET" push "$CONF_FILE" /data/local/tmp/redsocks.conf 2>/dev/null || \
-  adb -s "$ADB_TARGET" push "$CONF_FILE" /sdcard/redsocks.conf 2>/dev/null || {
-    echo "Не удалось загрузить конфиг на устройство. Положите redsocks.conf вручную." >&2
-    echo "Содержимое конфига:"
-    cat "$CONF_FILE"
-    exit 1
-  }
+  if ! adb -s "$ADB_TARGET" push "$CONF_FILE" /data/local/tmp/redsocks.conf 2>&1; then
+    if ! adb -s "$ADB_TARGET" push "$CONF_FILE" /sdcard/redsocks.conf 2>&1; then
+      echo "Не удалось загрузить конфиг на устройство. Убедитесь, что VM запущена и доступна по ADB (adb connect $ADB_TARGET). Положите redsocks.conf вручную при необходимости." >&2
+      echo "Содержимое конфига:"
+      cat "$CONF_FILE"
+      exit 1
+    fi
+  fi
   echo "Конфиг загружен на $ADB_TARGET. Запуск redsocks на устройстве..."
   if adb -s "$ADB_TARGET" shell "su -c '/data/local/tmp/start-redsocks.sh'" 2>/dev/null; then
     echo "Прокси применён (redsocks запущен)."
   else
-    echo "Запуск start-redsocks.sh на устройстве не удался (скрипт должен быть в /data/local/tmp/). Трафик пойдёт через прокси после ручного запуска или перезагрузки VM с Magisk." >&2
+    echo "Запуск start-redsocks.sh на устройстве не удался (скрипт и redsocks должны быть в шаблоне VM в /data/local/tmp/). Трафик пойдёт через прокси после ручного запуска или перезагрузки VM." >&2
   fi
 else
   echo "Конфиг redsocks (сохраните в /etc/redsocks.conf или передайте на VM вручную):"

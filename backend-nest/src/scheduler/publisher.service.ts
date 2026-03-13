@@ -49,11 +49,29 @@ export class PublisherService {
   }
 
   private async restartVmAndUpdateAdb(vmId: string, libvirtDomain: string): Promise<boolean> {
+    const db = this.db.getDb();
+    const vmRow = db.prepare('SELECT mac, proxy_id FROM vm WHERE id = ?').get(vmId) as { mac: string | null; proxy_id: string | null } | undefined;
     try {
       this.vmManager.forceStopVm(libvirtDomain);
       await new Promise((r) => setTimeout(r, VM_RESTART_DELAY_MS));
-      const { adb_address } = await this.vmManager.startVmAndWaitReady(libvirtDomain);
-      this.db.getDb().prepare("UPDATE vm SET status = ?, adb_address = ?, updated_at = datetime('now') WHERE id = ?").run('running', adb_address, vmId);
+      const { adb_address } = await this.vmManager.startVmAndWaitReady(libvirtDomain, vmRow?.mac ?? null);
+      db.prepare("UPDATE vm SET status = ?, adb_address = ?, updated_at = datetime('now') WHERE id = ?").run('running', adb_address, vmId);
+      if (vmRow?.proxy_id) {
+        const proxy = db.prepare('SELECT type, host, port, login, password FROM proxy WHERE id = ?').get(vmRow.proxy_id) as {
+          type: string;
+          host: string;
+          port: number;
+          login: string | null;
+          password: string | null;
+        } | undefined;
+        if (proxy) {
+          try {
+            this.vmManager.applyProxy(adb_address, proxy, { pushConfig: true });
+          } catch (e) {
+            console.warn('Publisher: applyProxy failed after VM restart', vmId, (e as Error)?.message);
+          }
+        }
+      }
       return true;
     } catch (e) {
       console.error('Publisher: VM restart failed', libvirtDomain, (e as Error)?.message);
@@ -61,7 +79,7 @@ export class PublisherService {
     }
   }
 
-  private async processOne(post: { id: string }) {
+  private async processOne(post: { id: string; profile_id: string }) {
     const db = this.db.getDb();
     db.prepare("UPDATE scheduled_post SET status = ?, updated_at = datetime('now') WHERE id = ?").run('publishing', post.id);
     await this.randomDelay();
@@ -70,6 +88,7 @@ export class PublisherService {
       db.prepare(
         "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), updated_at = datetime('now'), error_message = NULL WHERE id = ?",
       ).run('published', post.id);
+      db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
       await this.stopVmAfterPublish(post.id);
     } catch (err) {
       const msg = (err as Error)?.message || String(err);
@@ -82,6 +101,7 @@ export class PublisherService {
             db.prepare(
               "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), updated_at = datetime('now'), error_message = NULL WHERE id = ?",
             ).run('published', post.id);
+            db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
             await this.stopVmAfterPublish(post.id);
             await this.randomDelay();
             return;

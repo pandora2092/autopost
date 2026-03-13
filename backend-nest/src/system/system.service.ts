@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { execSync } from 'child_process';
 import { DatabaseService } from '../database/database.service';
 
 @Injectable()
@@ -34,5 +35,27 @@ export class SystemService {
     const posts: Record<string, number> = {};
     postCounts.forEach((r) => (posts[r.status] = r.c));
     return { vm: vmCount.c, profile: profileCount.c, posts };
+  }
+
+  /** Возвращает свободное и общее место на диске (в байтах) для /. */
+  getDiskSpace(): { free: number; total: number } {
+    try {
+      const out = execSync('df -k -P /', {
+        encoding: 'utf8',
+        timeout: 5000,
+        env: { ...process.env, LANG: 'C', LC_ALL: 'C' },
+      });
+      const lines = out.trim().split('\n').filter((l) => l.length > 0);
+      const dataLine = lines[lines.length - 1];
+      if (!dataLine) return { free: 0, total: 0 };
+      const parts = dataLine.split(/\s+/);
+      if (parts.length < 4) return { free: 0, total: 0 };
+      const totalK = parseInt(parts[1], 10);
+      const availK = parseInt(parts[3], 10);
+      if (!Number.isFinite(totalK) || !Number.isFinite(availK)) return { free: 0, total: 0 };
+      return { free: availK * 1024, total: totalK * 1024 };
+    } catch {
+      return { free: 0, total: 0 };
+    }
   }
 }

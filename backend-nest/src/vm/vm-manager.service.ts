@@ -72,11 +72,15 @@ export class VmManagerService {
     try {
       this.run(`virsh destroy "${domainName}" 2>/dev/null || true`);
     } catch (_) {}
-    this.run(`virsh undefine "${domainName}"`);
+    try {
+      this.run(`virsh undefine "${domainName}"`);
+    } catch (_) {
+      // домен мог быть удалён ранее (напр. через Cockpit)
+    }
     return { removed: true };
   }
 
-  getVmIp(domainName: string): string | null {
+  getVmIp(domainName: string, mac?: string | null): string | null {
     try {
       const out = this.run(`virsh domifaddr "${domainName}" 2>/dev/null`);
       const line = out.split('\n').find((l) => l.includes('ipv4'));
@@ -85,28 +89,51 @@ export class VmManagerService {
         if (m) return m[1];
       }
     } catch (_) {}
+    if (mac) {
+      const fromDhcp = this.getIpFromDhcpLeases(mac);
+      if (fromDhcp) return fromDhcp;
+    }
     return null;
   }
 
-  /**
-   * Запускает VM и ждёт появления IP (до таймаута). После получения IP — пауза (VM_START_POST_IP_DELAY_MS),
-   * затем проверка доступности через ping. Возвращает adb_address (IP:5555) для использования в публикации.
-   */
-  /** Проверяет доступность хоста по ping (1 пакет, таймаут 3 с). */
-  private pingHost(ip: string): boolean {
+  /** IP из аренд DHCP libvirt (для Android VM без guest agent). */
+  getIpFromDhcpLeases(mac: string): string | null {
+    if (!mac || !mac.match(/^[0-9a-fA-F:]+$/)) return null;
+    const net = process.env.VIRSH_NETWORK || 'default';
     try {
-      this.run(`ping -c 1 -W 3 ${ip}`, { timeout: 5000 });
+      const out = this.run(`virsh net-dhcp-leases "${net}" 2>/dev/null`, { timeout: 5000 });
+      const macLower = mac.toLowerCase();
+      for (const line of out.split('\n').slice(2)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 4) continue;
+        if ((parts[1] || '').toLowerCase() !== macLower) continue;
+        const ipPart = parts[3] || parts[4] || '';
+        const m = ipPart.match(/^(\d+\.\d+\.\d+\.\d+)/);
+        if (m) return m[1];
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /** Проверяет, что устройство доступно по ADB (Android часто не отвечает на ping). */
+  private isAdbReady(adbAddress: string): boolean {
+    try {
+      this.run(`adb -s ${adbAddress} shell true`, { timeout: 10000 });
       return true;
     } catch {
       return false;
     }
   }
 
-  async startVmAndWaitReady(domainName: string): Promise<{ ip: string; adb_address: string }> {
-    const timeoutMs = parseInt(process.env.VM_START_TIMEOUT_MS || '240000', 10);
-    const pollIntervalMs = parseInt(process.env.VM_START_POLL_INTERVAL_MS || '15000', 10);
-    const postIpDelayMs = parseInt(process.env.VM_START_POST_IP_DELAY_MS || '30000', 10);
-    const pingTimeoutMs = parseInt(process.env.VM_START_PING_TIMEOUT_MS || '120000', 10);
+  /**
+   * Запускает VM и ждёт появления IP (domifaddr или DHCP по MAC), затем доступности по ADB. Возвращает adb_address.
+   * mac — для получения IP из virsh net-dhcp-leases, если domifaddr не срабатывает (Android без guest agent).
+   */
+  async startVmAndWaitReady(domainName: string, mac?: string | null): Promise<{ ip: string; adb_address: string }> {
+    const timeoutMs = parseInt(process.env.VM_START_TIMEOUT_MS || '180000', 10);
+    const pollIntervalMs = parseInt(process.env.VM_START_POLL_INTERVAL_MS || '5000', 10);
+    const postIpDelayMs = parseInt(process.env.VM_START_POST_IP_DELAY_MS || '15000', 10);
+    const adbReadyTimeoutMs = parseInt(process.env.VM_START_ADB_READY_TIMEOUT_MS || '120000', 10);
 
     const state = this.getDomainState(domainName);
     if (state !== 'running') {
@@ -116,7 +143,7 @@ export class VmManagerService {
     let ip: string | null = null;
     const deadlineIp = Date.now() + timeoutMs;
     while (Date.now() < deadlineIp) {
-      ip = this.getVmIp(domainName);
+      ip = this.getVmIp(domainName, mac);
       if (ip) break;
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
@@ -124,16 +151,14 @@ export class VmManagerService {
 
     await new Promise((r) => setTimeout(r, postIpDelayMs));
 
-    const deadlinePing = Date.now() + pingTimeoutMs;
-    while (Date.now() < deadlinePing) {
-      if (this.pingHost(ip)) {
-        const adbAddress = `${ip}:5555`;
-        this.adbConnect(adbAddress);
-        return { ip, adb_address: adbAddress };
-      }
+    const adbAddress = `${ip}:5555`;
+    const deadlineAdb = Date.now() + adbReadyTimeoutMs;
+    while (Date.now() < deadlineAdb) {
+      this.adbConnect(adbAddress);
+      if (this.isAdbReady(adbAddress)) return { ip, adb_address: adbAddress };
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
-    throw new Error(`VM ${domainName}: IP ${ip} получен, но хост не отвечает на ping за ${pingTimeoutMs / 1000} с`);
+    throw new Error(`VM ${domainName}: IP ${ip} получен, но ADB не отвечает за ${adbReadyTimeoutMs / 1000} с (проверьте, что ADB включён на устройстве)`);
   }
 
   /** Подключает устройство по ADB (adb connect IP:5555). Вызывается при старте VM. */
@@ -162,6 +187,17 @@ export class VmManagerService {
       this.run(`"${script}" "${adbAddress}"`, { timeout: 15000 });
     } catch (err) {
       console.warn('set-build-fingerprint failed:', (err as Error)?.message);
+    }
+  }
+
+  /** Подмена ro.product.manufacturer и ro.product.model (чтобы не светить QEMU). Вызывается при «Настроить конфигурацию». */
+  setDeviceProps(adbAddress: string): void {
+    const script = path.join(this.scriptsDir, 'set-device-props.sh');
+    if (!fs.existsSync(script)) return;
+    try {
+      this.run(`"${script}" "${adbAddress}"`, { timeout: 15000 });
+    } catch (err) {
+      console.warn('set-device-props failed:', (err as Error)?.message);
     }
   }
 
@@ -196,6 +232,9 @@ export class VmManagerService {
     if (!fs.existsSync(script)) {
       console.warn('apply-proxy.sh не найден, прокси не применён');
       return;
+    }
+    if (options?.pushConfig === true) {
+      this.adbConnect(adbAddress);
     }
     const env = { ...process.env, ADB_TARGET: adbAddress };
     let args: string[];

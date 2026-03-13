@@ -5,13 +5,23 @@ export const POST_STATUS_LABELS = {
   assigned: 'Назначен',
   publishing: 'Публикуется',
   published: 'Опубликован',
-  simulated: 'Симуляция',
   failed: 'Ошибка',
   cancelled: 'Отменён',
 };
 
 export function getPostStatusLabel(status) {
   return POST_STATUS_LABELS[status] ?? status;
+}
+
+export const VM_STATUS_LABELS = {
+  running: 'Запущена',
+  stopped: 'Остановлена',
+  creating: 'Создаётся',
+  error: 'Ошибка',
+};
+
+export function getVmStatusLabel(status) {
+  return VM_STATUS_LABELS[status] ?? status;
 }
 
 async function request(path, options = {}) {
@@ -101,4 +111,5 @@ export const postsApi = {
 export const systemApi = {
   queue: () => request('/system/queue'),
   stats: () => request('/system/stats'),
+  diskSpace: () => request('/system/disk-space'),
 };

@@ -12,7 +12,8 @@ export class PostRunnerService {
   ) {}
 
   async publish(post: { id: string }): Promise<{ ok: boolean }> {
-    const row = this.db.getDb()
+    const db = this.db.getDb();
+    const row = db
       .prepare(
         `SELECT s.id, s.profile_id, s.media_path, s.caption, pr.vm_id, v.adb_address, v.libvirt_domain, v.status AS vm_status,
                 v.proxy_id, p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port, p.login AS proxy_login, p.password AS proxy_password
@@ -36,10 +37,27 @@ export class PostRunnerService {
         proxy_password: string | null;
       } | undefined;
     if (!row) throw new Error('Post or VM not found');
-    if (row.vm_status !== 'running') {
-      throw new Error('VM должна быть включена для публикации.');
-    }
     let adbAddress = row.adb_address;
+    if (row.vm_status !== 'running') {
+      // Попробуем автоматически запустить VM, если она выключена.
+      const vmRow = db
+        .prepare('SELECT id, mac FROM vm WHERE libvirt_domain = ?')
+        .get(row.libvirt_domain) as { id: string; mac: string | null } | undefined;
+      if (!vmRow) {
+        throw new Error('VM должна быть включена для публикации.');
+      }
+      try {
+        const { adb_address } = await this.vmManager.startVmAndWaitReady(row.libvirt_domain, vmRow.mac);
+        db.prepare("UPDATE vm SET status = ?, adb_address = ?, updated_at = datetime('now') WHERE id = ?").run(
+          'running',
+          adb_address,
+          vmRow.id,
+        );
+        adbAddress = adb_address;
+      } catch {
+        throw new Error('VM должна быть включена для публикации.');
+      }
+    }
     if (!adbAddress) {
       const ip = this.vmManager.getVmIp(row.libvirt_domain);
       if (ip) adbAddress = ip + ':5555';

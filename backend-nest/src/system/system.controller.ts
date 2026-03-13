@@ -14,4 +14,9 @@ export class SystemController {
   getStats() {
     return this.systemService.getStats();
   }
+
+  @Get('disk-space')
+  getDiskSpace() {
+    return this.systemService.getDiskSpace();
+  }
 }

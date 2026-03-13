@@ -93,7 +93,7 @@ function App() {
   return (
     <>
       <header>
-        <h1>Панель автопостинга Instagram</h1>
+        <h1>Панель автопостинга</h1>
         <nav>
           {nav.map(({ id, path, label }) => (
             <NavLink key={id} to={path} className={({ isActive }) => (isActive ? 'active' : '')}>

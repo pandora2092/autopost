@@ -1,8 +1,14 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { profilesApi } from '../api';
+import Pagination, { paginate, DEFAULT_PAGE_SIZE } from './Pagination';
 
 export default function ProfilesSection({ profiles, vms, onSave, onDelete, showToast }) {
   const [showForm, setShowForm] = useState(false);
+  const [page, setPage] = useState(1);
+  const { pageItems, currentPage, totalPages, total } = useMemo(
+    () => paginate(profiles, page, DEFAULT_PAGE_SIZE),
+    [profiles, page]
+  );
   const [vmId, setVmId] = useState('');
   const [instagramUsername, setInstagramUsername] = useState('');
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, profileId: null, profileLabel: '' });
@@ -70,29 +76,55 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
         <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить профиль</button>
       </div>
       {showForm && (
-        <div className="form">
-          <select value={vmId} onChange={(e) => setVmId(e.target.value)} required>
-            <option value="">— Выберите VM —</option>
-            {vms.map((v) => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
-          <input type="text" placeholder="Логин Instagram (опц.)" value={instagramUsername} onChange={(e) => setInstagramUsername(e.target.value)} />
-          <button type="button" className="btn" onClick={handleSave}>Сохранить</button>
-          <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
+        <div className="post-form card-inner">
+          <div className="post-form-row">
+            <label className="post-form-label">VM</label>
+            <select
+              value={vmId}
+              onChange={(e) => setVmId(e.target.value)}
+              className="post-form-input-wide"
+            >
+              <option value="">— Выберите VM —</option>
+              {vms.map((v) => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="post-form-row">
+            <label className="post-form-label">Логин Instagram</label>
+            <input
+              type="text"
+              className="post-form-input-wide"
+              placeholder="Логин Instagram (опц.)"
+              value={instagramUsername}
+              onChange={(e) => setInstagramUsername(e.target.value)}
+            />
+          </div>
+          <div className="post-form-actions">
+            <button type="button" className="btn primary" onClick={handleSave}>Добавить</button>
+            <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
+          </div>
         </div>
       )}
       <div className="list">
-        {profiles.map((p) => (
+        {pageItems.map((p) => (
           <div key={p.id} className="list-item">
             <span><strong>{p.vm_name}</strong></span>
             <span>{p.instagram_username || '—'}</span>
-            <span className="status">{p.instagram_authorized ? 'авторизован' : 'нет'}</span>
+            <span className={`status ${p.instagram_authorized ? 'authorized' : 'not-authorized'}`}>
+              {p.instagram_authorized ? 'авторизован' : 'не авторизован'}
+            </span>
             <button type="button" className="btn small" onClick={() => handleOpenStream(p.id)}>Открыть экран</button>
             <button type="button" className="btn small danger" onClick={() => handleDeleteClick(p)}>Удалить</button>
           </div>
         ))}
       </div>
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        total={total}
+        onPageChange={setPage}
+      />
 
       {deleteConfirmPopup.visible && (
         <div className="modal-overlay" onClick={handleDeleteCancel}>

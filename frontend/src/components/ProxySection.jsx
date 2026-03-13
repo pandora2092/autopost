@@ -1,8 +1,14 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { proxyApi } from '../api';
+import Pagination, { paginate, DEFAULT_PAGE_SIZE } from './Pagination';
 
 export default function ProxySection({ proxies, onSave, onDelete, showToast }) {
   const [showForm, setShowForm] = useState(false);
+  const [page, setPage] = useState(1);
+  const { pageItems, currentPage, totalPages, total } = useMemo(
+    () => paginate(proxies, page, DEFAULT_PAGE_SIZE),
+    [proxies, page]
+  );
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
   const [login, setLogin] = useState('');
@@ -10,12 +16,16 @@ export default function ProxySection({ proxies, onSave, onDelete, showToast }) {
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, proxyId: null, proxyLabel: '' });
 
   const handleSave = async () => {
-    if (!host || !port) {
+    if (!host?.trim() || !port) {
       showToast('Заполните хост и порт', 'error');
       return;
     }
+    if (!login?.trim() || !password) {
+      showToast('Заполните логин и пароль', 'error');
+      return;
+    }
     try {
-      await proxyApi.create({ type: 'socks5', host, port: +port, login: login || undefined, password: password || undefined });
+      await proxyApi.create({ type: 'socks5', host: host.trim(), port: +port, login: login.trim(), password });
       showToast('Прокси добавлен', 'success');
       setShowForm(false);
       setHost('');
@@ -59,25 +69,68 @@ export default function ProxySection({ proxies, onSave, onDelete, showToast }) {
       <div className="card-actions">
         <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить прокси</button>
       </div>
+      {showForm && (
+        <div className="post-form card-inner">
+          <div className="post-form-row">
+            <label className="post-form-label">Хост</label>
+            <input
+              type="text"
+              className="post-form-input-wide"
+              placeholder="Адрес прокси-сервера"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+            />
+          </div>
+          <div className="post-form-row">
+            <label className="post-form-label">Порт</label>
+            <input
+              type="number"
+              className="post-form-input-wide"
+              placeholder="Порт"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+            />
+          </div>
+          <div className="post-form-row">
+            <label className="post-form-label">Логин</label>
+            <input
+              type="text"
+              className="post-form-input-wide"
+              placeholder="Логин"
+              value={login}
+              onChange={(e) => setLogin(e.target.value)}
+            />
+          </div>
+          <div className="post-form-row">
+            <label className="post-form-label">Пароль</label>
+            <input
+              type="password"
+              className="post-form-input-wide"
+              placeholder="Пароль"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <div className="post-form-actions">
+            <button type="button" className="btn primary" onClick={handleSave}>Добавить</button>
+            <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
+          </div>
+        </div>
+      )}
       <div className="list">
-        {proxies.map((p) => (
+        {pageItems.map((p) => (
           <div key={p.id} className="list-item">
             <span>{p.type} {p.host}:{p.port}</span>
-            <span className="id">{p.id.slice(0, 8)}</span>
             <button type="button" className="btn small danger" onClick={() => handleDeleteClick(p)}>Удалить</button>
           </div>
         ))}
       </div>
-      {showForm && (
-        <div className="form">
-          <input type="text" placeholder="Хост" value={host} onChange={(e) => setHost(e.target.value)} />
-          <input type="number" placeholder="Порт" value={port} onChange={(e) => setPort(e.target.value)} />
-          <input type="text" placeholder="Логин (опц.)" value={login} onChange={(e) => setLogin(e.target.value)} />
-          <input type="password" placeholder="Пароль (опц.)" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <button type="button" className="btn" onClick={handleSave}>Сохранить</button>
-          <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
-        </div>
-      )}
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        total={total}
+        onPageChange={setPage}
+      />
 
       {deleteConfirmPopup.visible && (
         <div className="modal-overlay" onClick={handleDeleteCancel}>

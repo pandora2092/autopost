@@ -67,31 +67,52 @@ export class SchedulerService implements OnModuleInit {
   }
 
   /**
-   * Для каждой VM из списка постов: если VM не running — запускает и ждёт готовности, обновляет БД.
-   * При таймауте ping (VM зависла) — принудительно останавливает, пауза, повторный запуск. Возвращает true, если VM готова.
+   * Для каждой VM из списка постов: если VM не running — запускает и ждёт готовности, применяет прокси, обновляет БД.
+   * При таймауте — принудительно останавливает, пауза, повторный запуск. Возвращает true, если VM готова.
    */
   private async ensureVmRunning(vmId: string, libvirtDomain: string): Promise<boolean> {
     const db = this.db.getDb();
-    const row = db.prepare('SELECT id, status FROM vm WHERE id = ?').get(vmId) as { id: string; status: string } | undefined;
+    const row = db.prepare('SELECT id, status, mac, proxy_id FROM vm WHERE id = ?').get(vmId) as {
+      id: string;
+      status: string;
+      mac: string | null;
+      proxy_id: string | null;
+    } | undefined;
     if (!row) return false;
     if (row.status === 'running') return true;
     const restartDelayMs = parseInt(process.env.VM_RESTART_DELAY_MS || '8000', 10);
     const tryStart = async (): Promise<{ adb_address: string } | null> => {
       try {
-        return await this.vmManager.startVmAndWaitReady(libvirtDomain);
+        return await this.vmManager.startVmAndWaitReady(libvirtDomain, row.mac);
       } catch {
         return null;
       }
     };
     let result = await tryStart();
     if (!result) {
-      console.warn('Scheduler: VM', libvirtDomain, 'ping timeout, forcing restart...');
+      console.warn('Scheduler: VM', libvirtDomain, 'timeout, forcing restart...');
       this.vmManager.forceStopVm(libvirtDomain);
       await new Promise((r) => setTimeout(r, restartDelayMs));
       result = await tryStart();
     }
     if (result) {
       db.prepare("UPDATE vm SET status = ?, adb_address = ?, updated_at = datetime('now') WHERE id = ?").run('running', result.adb_address, vmId);
+      if (row.proxy_id) {
+        const proxy = db.prepare('SELECT type, host, port, login, password FROM proxy WHERE id = ?').get(row.proxy_id) as {
+          type: string;
+          host: string;
+          port: number;
+          login: string | null;
+          password: string | null;
+        } | undefined;
+        if (proxy) {
+          try {
+            this.vmManager.applyProxy(result.adb_address, proxy, { pushConfig: true });
+          } catch (e) {
+            console.warn('Scheduler: applyProxy failed for VM', vmId, (e as Error)?.message);
+          }
+        }
+      }
       return true;
     }
     console.error('Scheduler: failed to start VM', vmId, 'after restart');

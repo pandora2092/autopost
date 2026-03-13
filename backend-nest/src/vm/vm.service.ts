@@ -82,25 +82,24 @@ export class VmService {
     return this.findOne(id);
   }
 
-  start(id: string) {
+  async start(id: string): Promise<{ status: string; firstStart?: boolean }> {
     const vm = this.db.getDb()
-      .prepare('SELECT id, libvirt_domain, proxy_id FROM vm WHERE id = ?')
-      .get(id) as { id: string; libvirt_domain: string; proxy_id: string | null } | undefined;
+      .prepare('SELECT id, libvirt_domain, proxy_id, adb_address, mac FROM vm WHERE id = ?')
+      .get(id) as { id: string; libvirt_domain: string; proxy_id: string | null; adb_address: string | null; mac: string | null } | undefined;
     if (!vm) throw new NotFoundException('VM не найдена');
     this.vmManager.startVm(vm.libvirt_domain);
     this.db.getDb().prepare("UPDATE vm SET status = ?, updated_at = datetime('now') WHERE id = ?").run('running', id);
-    this.vmManager.startVmAndWaitReady(vm.libvirt_domain).then(
-      ({ adb_address }) => {
-        this.db.getDb().prepare("UPDATE vm SET adb_address = ?, updated_at = datetime('now') WHERE id = ?").run(adb_address, id);
-        if (vm.proxy_id) {
-          const proxy = this.db.getDb()
-            .prepare('SELECT type, host, port, login, password FROM proxy WHERE id = ?')
-            .get(vm.proxy_id) as { type: string; host: string; port: number; login: string | null; password: string | null } | undefined;
-          if (proxy) this.vmManager.applyProxy(adb_address, proxy);
-        }
-      },
-      () => {},
-    );
+    if (!vm.adb_address) {
+      return { status: 'running', firstStart: true };
+    }
+    const { adb_address } = await this.vmManager.startVmAndWaitReady(vm.libvirt_domain, vm.mac);
+    this.db.getDb().prepare("UPDATE vm SET adb_address = ?, updated_at = datetime('now') WHERE id = ?").run(adb_address, id);
+    if (vm.proxy_id) {
+      const proxy = this.db.getDb()
+        .prepare('SELECT type, host, port, login, password FROM proxy WHERE id = ?')
+        .get(vm.proxy_id) as { type: string; host: string; port: number; login: string | null; password: string | null } | undefined;
+      if (proxy) this.vmManager.applyProxy(adb_address, proxy, { pushConfig: true });
+    }
     return { status: 'running' };
   }
 
@@ -131,6 +130,7 @@ export class VmService {
     if (!adbAddress) throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
     const { android_id } = this.vmManager.setAndroidId(adbAddress, androidId ?? null);
     this.vmManager.setBuildFingerprint(adbAddress);
+    this.vmManager.setDeviceProps(adbAddress);
     this.db.getDb().prepare('UPDATE vm SET android_id = ?, adb_address = ? WHERE id = ?').run(android_id, adbAddress, id);
     return { android_id, adb_address: adbAddress };
   }
