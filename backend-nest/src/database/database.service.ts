@@ -66,6 +66,7 @@ export class DatabaseService implements OnModuleInit {
         status TEXT DEFAULT 'pending' CHECK(status IN ('pending','assigned','publishing','published','simulated','failed','cancelled')),
         assigned_at TEXT,
         published_at TEXT,
+        post_url TEXT,
         error_message TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -87,6 +88,7 @@ export class DatabaseService implements OnModuleInit {
     `);
     this.migrateScheduledPostSimulatedStatus(db);
     this.migrateVmInstagramInstalled(db);
+    this.migrateScheduledPostUrl(db);
   }
 
   private migrateVmInstagramInstalled(db: Database.Database): void {
@@ -96,6 +98,19 @@ export class DatabaseService implements OnModuleInit {
       ALTER TABLE vm ADD COLUMN instagram_installed INTEGER DEFAULT 0;
       INSERT INTO _migrations (name) VALUES ('vm_instagram_installed');
     `);
+  }
+
+  private migrateScheduledPostUrl(db: Database.Database): void {
+    const exists = db.prepare("SELECT 1 FROM _migrations WHERE name = ?").get('scheduled_post_post_url');
+    if (exists) return;
+    const columns = db.prepare("PRAGMA table_info(scheduled_post)").all() as { name: string }[];
+    const hasPostUrl = columns.some((c) => c.name === 'post_url');
+    if (!hasPostUrl) {
+      db.exec(`
+        ALTER TABLE scheduled_post ADD COLUMN post_url TEXT;
+      `);
+    }
+    db.exec("INSERT INTO _migrations (name) VALUES ('scheduled_post_post_url');");
   }
 
   private migrateScheduledPostSimulatedStatus(db: Database.Database): void {
@@ -111,6 +126,7 @@ export class DatabaseService implements OnModuleInit {
         status TEXT DEFAULT 'pending' CHECK(status IN ('pending','assigned','publishing','published','simulated','failed','cancelled')),
         assigned_at TEXT,
         published_at TEXT,
+        post_url TEXT,
         error_message TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))

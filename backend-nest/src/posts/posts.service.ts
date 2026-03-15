@@ -25,7 +25,7 @@ export class PostsService {
 
   findAll(status?: string, profile_id?: string) {
     let sql = `
-      SELECT s.id, s.profile_id, s.media_path, s.caption, s.scheduled_at, s.status, s.assigned_at, s.published_at, s.error_message, s.created_at,
+      SELECT s.id, s.profile_id, s.media_path, s.caption, s.scheduled_at, s.status, s.assigned_at, s.published_at, s.post_url, s.error_message, s.created_at,
              pr.instagram_username, v.name AS vm_name
       FROM scheduled_post s
       JOIN profile pr ON pr.id = s.profile_id

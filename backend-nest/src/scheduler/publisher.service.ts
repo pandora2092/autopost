@@ -85,9 +85,18 @@ export class PublisherService {
     await this.randomDelay();
     try {
       await this.postRunner.publish(post);
+      const profile = db
+        .prepare(
+          `SELECT pr.instagram_username
+           FROM scheduled_post s
+           JOIN profile pr ON pr.id = s.profile_id
+           WHERE s.id = ?`,
+        )
+        .get(post.id) as { instagram_username: string | null } | undefined;
+      const postUrl = profile?.instagram_username ? `https://www.instagram.com/${profile.instagram_username}/` : null;
       db.prepare(
-        "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), updated_at = datetime('now'), error_message = NULL WHERE id = ?",
-      ).run('published', post.id);
+        "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
+      ).run('published', postUrl, post.id);
       db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
       await this.stopVmAfterPublish(post.id);
     } catch (err) {
@@ -98,9 +107,18 @@ export class PublisherService {
           console.warn('Publisher: VM restarted, retrying post', post.id);
           try {
             await this.postRunner.publish(post);
+            const profile = db
+              .prepare(
+                `SELECT pr.instagram_username
+                 FROM scheduled_post s
+                 JOIN profile pr ON pr.id = s.profile_id
+                 WHERE s.id = ?`,
+              )
+              .get(post.id) as { instagram_username: string | null } | undefined;
+            const postUrl = profile?.instagram_username ? `https://www.instagram.com/${profile.instagram_username}/` : null;
             db.prepare(
-              "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), updated_at = datetime('now'), error_message = NULL WHERE id = ?",
-            ).run('published', post.id);
+              "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
+            ).run('published', postUrl, post.id);
             db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
             await this.stopVmAfterPublish(post.id);
             await this.randomDelay();

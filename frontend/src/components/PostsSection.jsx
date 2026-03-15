@@ -253,6 +253,17 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
               <span className="post-meta-item">{p.media_path}</span>
               <span className="post-meta-date">{new Date(p.scheduled_at).toLocaleString()}</span>
             </div>
+            {p.status === 'published' && (p.post_url || p.instagram_username) && (
+              <div className="post-card-link">
+                <a
+                  href={p.post_url || `https://www.instagram.com/${p.instagram_username}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Открыть пост в Instagram
+                </a>
+              </div>
+            )}
             {p.status === 'failed' && p.error_message && (
               <div className="post-card-error">
                 {p.error_message}
