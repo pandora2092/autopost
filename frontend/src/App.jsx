@@ -6,6 +6,7 @@ import VmSection from './components/VmSection';
 import ProfilesSection from './components/ProfilesSection';
 import PostsSection from './components/PostsSection';
 import QueueSection from './components/QueueSection';
+import UserGuideSection from './components/UserGuideSection';
 import Toast from './components/Toast';
 import './App.css';
 
@@ -15,6 +16,7 @@ const nav = [
   { id: 'profiles', path: '/profiles', label: 'Профили' },
   { id: 'posts', path: '/posts', label: 'Публикации' },
   { id: 'queue', path: '/queue', label: 'Очередь' },
+  { id: 'guide', path: '/guide', label: 'Руководство пользователя' },
 ];
 
 function App() {
@@ -110,6 +112,7 @@ function App() {
           <Route path="/profiles" element={<ProfilesSection profiles={profiles} vms={vms} onSave={loadProfiles} onDelete={() => { loadProfiles(); loadPosts(); }} showToast={showToast} />} />
           <Route path="/posts" element={<PostsSection posts={posts} profiles={profiles} onSave={() => { loadPosts(); loadQueue(); }} onCancel={() => { loadPosts(); loadQueue(); }} showToast={showToast} />} />
           <Route path="/queue" element={<QueueSection queue={queue} stats={stats} />} />
+          <Route path="/guide" element={<UserGuideSection />} />
         </Routes>
       </main>
       <Toast text={toast.text} type={toast.type} />

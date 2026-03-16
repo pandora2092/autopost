@@ -11,6 +11,8 @@ const POST_PUSH_DELAY_MS = parseInt(process.env.POST_PUSH_DELAY_MS || '25000', 1
 const REMOTE_DIR = process.env.REMOTE_MEDIA_DIR || '/sdcard/Download';
 const APPIUM_HOST = process.env.APPIUM_HOST || '127.0.0.1';
 const APPIUM_PORT = parseInt(process.env.APPIUM_PORT || '4723', 10);
+/** Пауза после нажатия Share/Continue, чтобы Instagram успел завершить публикацию (keep Instagram open). */
+const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '120000', 2); // 10 минут по умолчанию
 
 /**
  * Публикация Reel: Profile → Create New → Create new reel → выбор видео в галерее → Next (edit) →
@@ -551,6 +553,11 @@ export class AppiumPublishService {
       }
 
       await delay(ACTION_DELAY_MS * 2);
+
+      // Дополнительная пауза, чтобы оставить Instagram открытым до завершения выгрузки рила.
+      if (POST_PUBLISH_DELAY_MS > 0) {
+        await delay(POST_PUBLISH_DELAY_MS);
+      }
     } finally {
       await driver.deleteSession();
     }
