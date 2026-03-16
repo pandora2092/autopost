@@ -11,8 +11,19 @@ const POST_PUSH_DELAY_MS = parseInt(process.env.POST_PUSH_DELAY_MS || '25000', 1
 const REMOTE_DIR = process.env.REMOTE_MEDIA_DIR || '/sdcard/Download';
 const APPIUM_HOST = process.env.APPIUM_HOST || '127.0.0.1';
 const APPIUM_PORT = parseInt(process.env.APPIUM_PORT || '4723', 10);
-/** Пауза после нажатия Share/Continue, чтобы Instagram успел завершить публикацию (keep Instagram open). */
-const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '120000', 2); // 10 минут по умолчанию
+/**
+ * Ожидание завершения загрузки после Share/Continue.
+ * По умолчанию ждём до 20 минут, ориентируясь на прогресс-бар "keep Instagram open".
+ */
+const POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
+/** Интервал опроса индикатора загрузки. */
+const POST_PUBLISH_POLL_MS = parseInt(process.env.POST_PUBLISH_POLL_MS || '3000', 10);
+/** Доп. пауза после завершения загрузки (на всякий случай). */
+const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '0', 10);
+/** Пауза после перехода на вкладку Home перед поиском индикатора "keep Instagram open". */
+const POST_PUBLISH_HOME_DELAY_MS = parseInt(process.env.POST_PUBLISH_HOME_DELAY_MS || '5000', 10);
+/** Сколько ждать появления вкладки Home после закрытия модалки. */
+const HOME_TAB_WAIT_MS = parseInt(process.env.HOME_TAB_WAIT_MS || '20000', 10);
 
 /**
  * Публикация Reel: Profile → Create New → Create new reel → выбор видео в галерее → Next (edit) →
@@ -23,57 +34,98 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Месяцы для формата "March 12, 2026 9:21 AM" как в content-desc превью Instagram. */
-const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-/** Форматирует Date в строку как в content-desc: "March 12, 2026 9:21 AM". */
-function formatThumbnailDate(d: Date): string {
-  const month = MONTH_NAMES[d.getMonth()];
-  const day = d.getDate();
-  const year = d.getFullYear();
-  let hour = d.getHours();
-  const ampm = hour >= 12 ? 'PM' : 'AM';
-  hour = hour % 12 || 12;
-  const min = d.getMinutes();
-  return `${month} ${day}, ${year} ${hour}:${min.toString().padStart(2, '0')} ${ampm}`;
-}
-
-/**
- * Возвращает строку даты/времени для сопоставления с content-desc превью ("... created on March 12, 2026 9:21 AM").
- * Пытается взять mtime файла на устройстве (adb shell ls -l), иначе использует переданную дату (например, время после push).
- */
-function getThumbnailDateStringFromDevice(adbAddress: string, remotePath: string, fallbackDate: Date): string {
-  try {
-    const out = execSync(`adb -s ${adbAddress} shell "ls -l ${remotePath.replace(/"/g, '\\"')}"`, {
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    // Типичные форматы: "Mar 12 09:21" или "2026-03-12 09:21" или "Mar 12 2025" (год в конце)
-    const line = out.split('\n')[0] || '';
-    const matchIso = line.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})/);
-    if (matchIso) {
-      const [, y, m, d, h, min] = matchIso;
-      const monthIndex = parseInt(m!, 10) - 1;
-      const date = new Date(parseInt(y!, 10), monthIndex, parseInt(d!, 10), parseInt(h!, 10), parseInt(min!, 10));
-      return formatThumbnailDate(date);
-    }
-    const matchShort = line.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{1,2}):(\d{2})/);
-    if (matchShort) {
-      const shortMonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      const mi = shortMonths.indexOf(matchShort[1]);
-      const year = fallbackDate.getFullYear();
-      const date = new Date(year, mi, parseInt(matchShort[2], 10), parseInt(matchShort[3], 10), parseInt(matchShort[4], 10));
-      return formatThumbnailDate(date);
-    }
-  } catch {
-    // игнорируем
-  }
-  return formatThumbnailDate(fallbackDate);
-}
-
 @Injectable()
 export class AppiumPublishService {
   constructor(private readonly vmManager: VmManagerService) {}
+
+  /** Переход на вкладку Home (лента) после публикации. Ждём появления элемента до HOME_TAB_WAIT_MS. */
+  private async openHomeTab(driver: WebdriverIO.Browser): Promise<void> {
+    const homeTabSelectors = [
+      '//*[@resource-id="com.instagram.android:id/feed_tab"]',
+      '//*[@content-desc="Home"][@resource-id="com.instagram.android:id/feed_tab"]',
+      '//*[@content-desc="Home"]',
+      '~Home',
+      'android=new UiSelector().resourceId("com.instagram.android:id/feed_tab")',
+      'android=new UiSelector().description("Home")',
+      '//*[@resource-id="com.instagram.android:id/feed_tab"]//*[@resource-id="com.instagram.android:id/tab_icon"]',
+    ];
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < HOME_TAB_WAIT_MS) {
+      for (const sel of homeTabSelectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            await delay(2000);
+            return;
+          }
+        } catch {
+          continue;
+        }
+      }
+      await delay(2000);
+    }
+    throw new Error(
+      `Не удалось открыть вкладку Home после публикации за ${HOME_TAB_WAIT_MS}мс. Селекторы: feed_tab, content-desc="Home".`,
+    );
+  }
+
+  private async waitForInstagramPostingToFinish(driver: WebdriverIO.Browser): Promise<void> {
+    if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
+
+    const startedAt = Date.now();
+    const progressBarSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_progress_bar"]';
+    const statusContainerSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_status_container"]';
+
+    while (Date.now() - startedAt < POST_PUBLISH_TIMEOUT_MS) {
+      let uploading = false;
+      try {
+        const pb = await driver.$(progressBarSel);
+        uploading = pb ? await pb.isDisplayed() : false;
+      } catch {
+        uploading = false;
+      }
+
+      if (!uploading) {
+        try {
+          const container = await driver.$(statusContainerSel);
+          uploading = container ? await container.isDisplayed() : false;
+        } catch {
+          uploading = false;
+        }
+      }
+
+      if (!uploading) return;
+      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
+    }
+
+    throw new Error(
+      `Instagram не завершил публикацию за ${POST_PUBLISH_TIMEOUT_MS}мс (индикатор загрузки всё ещё виден).`,
+    );
+  }
+
+  /** Клик чуть выше середины экрана, чтобы закрыть возможное модальное окно после Share/Continue. */
+  private async dismissModalTapAboveCenter(driver: WebdriverIO.Browser): Promise<void> {
+    try {
+      const { width, height } = await driver.getWindowSize();
+      const x = Math.floor(width / 2);
+      const y = Math.floor(height * 0.4);
+      await driver.execute('mobile: clickGesture', { x, y });
+      await delay(1500);
+    } catch {
+      // Игнорируем: модалки может не быть или другой драйвер
+    }
+  }
+
+  /**
+   * После Share/Continue: закрытие модалки (тап) → переход на Home → пауза → поиск индикатора "keep Instagram open" → ожидание окончания загрузки.
+   */
+  private async waitForPublishCompletion(driver: WebdriverIO.Browser): Promise<void> {
+    await this.dismissModalTapAboveCenter(driver);
+    await this.openHomeTab(driver);
+    await delay(POST_PUBLISH_HOME_DELAY_MS);
+    await this.waitForInstagramPostingToFinish(driver);
+  }
 
   /**
    * Копирует медиафайл на устройство по ADB. Возвращает путь на устройстве.
@@ -130,7 +182,7 @@ export class AppiumPublishService {
   }
 
   /**
-   * Публикация Reel: post.media_path → adb push в /sdcard/Download → в пикере выбор превью по дате (content-desc "created on ...").
+   * Публикация Reel: post.media_path → adb push в /sdcard/Download → в пикере выбор первого элемента в галерее.
    */
   async publishWithAppium(
     post: { id: string; media_path: string; caption: string | null },
@@ -139,8 +191,6 @@ export class AppiumPublishService {
     this.vmManager.adbConnect(adbAddress);
     await delay(1000);
     const remotePath = this.pushMediaToDevice(adbAddress, post.media_path);
-    const pushTime = new Date();
-    const expectedThumbnailDateStr = getThumbnailDateStringFromDevice(adbAddress, remotePath, pushTime);
     await delay(POST_PUSH_DELAY_MS);
 
     // Appium ищет устройство в adb devices — повторный connect перед сессией
@@ -334,10 +384,8 @@ export class AppiumPublishService {
           continue;
         }
       }
-      // Выбор по времени создания: content-desc вида "Unselected Video thumbnail created on March 12, 2026 9:21 AM". Сопоставление по полной дате, по дате без времени, по "March 12"; запасной вариант — первое видео.
+      // Выбор первого элемента из списка в галерее (как отображается в сетке).
       const thumbnailXpath = '//*[@resource-id="com.instagram.android:id/gallery_grid_item_thumbnail"]';
-      const dateOnlyStr = expectedThumbnailDateStr.replace(/\s+\d{1,2}:\d{2}\s*[AP]M$/i, '').trim();
-      const monthDayStr = expectedThumbnailDateStr.replace(/,?\s+\d{4}.*$/i, '').trim();
 
       const selectionCircleId = 'com.instagram.android:id/gallery_grid_item_selection_circle';
       const trySelectThumbnail = async (): Promise<boolean> => {
@@ -350,29 +398,21 @@ export class AppiumPublishService {
             await el.click();
           }
         };
+        // 1) Сначала пробуем выбрать первое видео (чтобы случайно не выбрать фото, если в Recents смешанный контент).
         for (const el of elements) {
           if (!(await el.isDisplayed())) continue;
-          const desc = (await el.getAttribute('content-desc')) || '';
-          if (!desc.includes('Video')) continue;
-          const matchesDate =
-            desc.includes(expectedThumbnailDateStr) ||
-            desc.includes(dateOnlyStr) ||
-            desc.includes(monthDayStr) ||
-            desc.replace(/\s*[AP]M$/i, '').includes(expectedThumbnailDateStr.replace(/\s*[AP]M$/i, '').trim());
-          if (matchesDate) {
-            await clickTarget(el as { $: (selector: string) => unknown; click: () => Promise<void> });
-            await delay(ACTION_DELAY_MS);
-            return true;
-          }
+          const desc = String((await el.getAttribute('content-desc')) || '');
+          if (!/video/i.test(desc)) continue;
+          await clickTarget(el as { $: (selector: string) => unknown; click: () => Promise<void> });
+          await delay(ACTION_DELAY_MS);
+          return true;
         }
+        // 2) Если явного "Video" нет — выбираем первый видимый элемент сетки.
         for (const el of elements) {
           if (!(await el.isDisplayed())) continue;
-          const d = (await el.getAttribute('content-desc')) || '';
-          if (d.includes('Video')) {
-            await clickTarget(el as { $: (selector: string) => unknown; click: () => Promise<void> });
-            await delay(ACTION_DELAY_MS);
-            return true;
-          }
+          await clickTarget(el as { $: (selector: string) => unknown; click: () => Promise<void> });
+          await delay(ACTION_DELAY_MS);
+          return true;
         }
         return false;
       };
@@ -405,7 +445,7 @@ export class AppiumPublishService {
       if (!fileSelected) {
         const mediaName = path.basename(post.media_path);
         throw new Error(
-          `Превью не найдено: файл "${mediaName}", ожидаемая дата в content-desc "created on ${expectedThumbnailDateStr}". Откройте в пикере папку Download и проверьте, что превью отображается и дата совпадает.`,
+          `Не удалось выбрать медиа в галерее (первый элемент). Файл: "${mediaName}". Откройте в пикере папку Download/Recents и проверьте, что превью отображается и доступно для выбора.`,
         );
       }
       await delay(ACTION_DELAY_MS);
@@ -554,7 +594,8 @@ export class AppiumPublishService {
 
       await delay(ACTION_DELAY_MS * 2);
 
-      // Дополнительная пауза, чтобы оставить Instagram открытым до завершения выгрузки рила.
+      await this.waitForPublishCompletion(driver);
+
       if (POST_PUBLISH_DELAY_MS > 0) {
         await delay(POST_PUBLISH_DELAY_MS);
       }
