@@ -73,13 +73,13 @@ export class ProfilesService {
   getStreamUrl(id: string) {
     const row = this.db.getDb()
       .prepare(
-        'SELECT pr.id, v.adb_address, v.libvirt_domain FROM profile pr JOIN vm v ON v.id = pr.vm_id WHERE pr.id = ?',
+        'SELECT pr.id, v.adb_address, v.libvirt_domain, v.mac FROM profile pr JOIN vm v ON v.id = pr.vm_id WHERE pr.id = ?',
       )
-      .get(id) as { id: string; adb_address: string | null; libvirt_domain: string } | undefined;
+      .get(id) as { id: string; adb_address: string | null; libvirt_domain: string; mac: string | null } | undefined;
     if (!row) throw new NotFoundException('Профиль не найден');
     let adbAddress = row.adb_address;
     if (!adbAddress) {
-      const ip = this.vmManager.getVmIp(row.libvirt_domain);
+      const ip = this.vmManager.getVmIp(row.libvirt_domain, row.mac);
       if (ip) adbAddress = `${ip}:5555`;
     }
     if (!adbAddress) {
@@ -89,13 +89,42 @@ export class ProfilesService {
           'Запустите VM и укажите adb_address (IP:5555) в настройках VM. Затем откройте экран снова.',
       };
     }
+    // Ensure device is present in `adb devices` (needed for ws-scrcpy proxy-adb/adb forward).
+    this.vmManager.adbConnect(adbAddress);
     const portBase = parseInt(process.env.SCRCPY_PORT_BASE || '27183', 10);
     const streamPort = portBase + (parseInt(id.split('-').pop()?.replace(/\D/g, '') || '0', 10) % 1000);
-    return {
+    const result: {
+      ok: boolean;
+      adb_address: string;
+      stream_port: number;
+      instruction: string;
+      stream_web_url?: string;
+    } = {
       ok: true,
       adb_address: adbAddress,
       stream_port: streamPort,
       instruction: `Для просмотра экрана установите scrcpy и выполните: scrcpy -s ${adbAddress}`,
     };
+    const streamWebBase = process.env.STREAM_WEB_BASE?.trim();
+    if (streamWebBase) {
+      const base = streamWebBase.replace(/\/$/, '');
+      // ws-scrcpy expects required params: action=stream, udid, player, ws (websocket url)
+      // ws must point to ws-scrcpy websocket endpoint with action=proxy-adb.
+      const httpUrl = new URL(base);
+      const wsProto = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      const pathname = httpUrl.pathname || '/';
+      const wsUrl = new URL(`${wsProto}//${httpUrl.host}${pathname}`);
+      wsUrl.searchParams.set('action', 'proxy-adb');
+      wsUrl.searchParams.set('remote', 'tcp:8886');
+      wsUrl.searchParams.set('udid', adbAddress);
+
+      const hash = new URLSearchParams();
+      hash.set('action', 'stream');
+      hash.set('udid', adbAddress);
+      hash.set('player', 'broadway');
+      hash.set('ws', wsUrl.toString());
+      result.stream_web_url = `${base}/#!${hash.toString()}`;
+    }
+    return result;
   }
 }

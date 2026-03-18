@@ -58,7 +58,32 @@ npm run dev
 
 - Добавьте профиль, привязав его к VM.
 - Установите Instagram на VM (вручную в шаблоне или через `adb install` после клонирования).
-- Кнопка «Открыть экран» даёт команду для scrcpy или открывает страницу с инструкцией. Войдите в Instagram вручную в стриме/через scrcpy.
+- Кнопка «Открыть экран» открывает стрим экрана VM в браузере (если настроен ws-scrcpy, см. ниже) или страницу с командой scrcpy для локального просмотра. Войдите в Instagram вручную в стриме/через scrcpy.
+
+**Браузерный стрим экрана VM:** чтобы по кнопке «Открыть экран» сразу шёл стрим в браузере, на хосте с ADB и VM запустите [ws-scrcpy](https://github.com/EucalyZ/ws-scrcpy) (или форк с поддержкой `udid` в URL). Затем в бэкенде задайте переменную окружения `STREAM_WEB_BASE` — базовый URL интерфейса ws-scrcpy, например `http://localhost:8000` при локальной разработке или `https://ваш-домен.ru/stream-view` если nginx проксирует `/stream-view/` на ws-scrcpy (порт 8000). В ответе `GET /api/profiles/:id/stream-url` появится поле `stream_web_url`; фронт откроет его по кнопке «Открыть экран». Без `STREAM_WEB_BASE` по-прежнему открывается страница с командой scrcpy.
+
+**Сборка ws-scrcpy:** при первой сборке (`npm run dist:prod` или `npm start`) возникает ошибка `Can't resolve '../../../vendor/Genymobile/scrcpy/server/scrcpy-server'`, так как бинарник scrcpy-server нужно собрать вручную. Требуется Java JDK 17+ и Android SDK (API 36). Выполните:
+
+1. **Принять лицензии Android SDK.** Иначе сборка выдаст «some licences have not been accepted». Нужен `sdkmanager` (идёт в [Android Command-line Tools](https://developer.android.com/studio#command-tools) или в пакете `google-android-cmdline-tools-*-installer`). Затем:
+   ```bash
+   export ANDROID_HOME=/usr/lib/android-sdk   # или $HOME/Android/Sdk
+   yes | sdkmanager --licenses
+   ```
+   Если `sdkmanager` не в PATH, укажите полный путь, например: `yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses`. При системном SDK (`/usr/lib/android-sdk`) может понадобиться: `sudo mkdir -p $ANDROID_HOME/licenses` и при необходимости `sudo yes | sdkmanager --licenses`.
+
+2. **Собрать scrcpy-server и скопировать APK:**
+   ```bash
+   cd ws-scrcpy
+   git submodule update --init --recursive   # если клонировали без --recursive
+   export ANDROID_HOME=/usr/lib/android-sdk  # или путь к вашему SDK
+   cd vendor/Genymobile/scrcpy
+   ./gradlew assembleDebug
+   APK=$(find server/build -name "*.apk" -type f | head -1)
+   if [ -n "$APK" ]; then cp "$APK" server/scrcpy-server; else echo "APK не найден в server/build"; fi
+   cd ../../..
+   npm install && npm start
+   ```
+   Если `find` не находит APK, посмотрите вручную: `ls -la server/build/outputs/apk/debug/` или `find server/build -name "*.apk"`.
 
 ### 6. Планирование постов
 

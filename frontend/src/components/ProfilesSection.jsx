@@ -12,6 +12,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
   const [vmId, setVmId] = useState('');
   const [instagramUsername, setInstagramUsername] = useState('');
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, profileId: null, profileLabel: '' });
+  const [streamWarnPopup, setStreamWarnPopup] = useState({ visible: false, vmName: '' });
 
   const handleSave = async () => {
     if (!vmId) {
@@ -31,18 +32,25 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
   };
 
   const handleOpenStream = async (profileId) => {
+    const p = profiles.find((x) => x.id === profileId);
+    if (p && p.vm_status && p.vm_status !== 'running') {
+      setStreamWarnPopup({ visible: true, vmName: p.vm_name || '' });
+      return;
+    }
     try {
       const r = await profilesApi.getStreamUrl(profileId);
       if (!r.ok) {
         showToast(r.instruction || 'Не удалось получить адрес', 'error');
         return;
       }
-      const url = `/stream.html?adb=${encodeURIComponent(r.adb_address)}`;
-      window.open(url, '_blank', 'width=800,height=600');
+      const url = r.stream_web_url || `/stream.html?adb=${encodeURIComponent(r.adb_address)}`;
+      window.open(url, '_blank', 'width=900,height=700');
     } catch (e) {
       showToast(e.message, 'error');
     }
   };
+
+  const handleStreamWarnClose = () => setStreamWarnPopup({ visible: false, vmName: '' });
 
   const handleDeleteClick = (p) => {
     setDeleteConfirmPopup({
@@ -138,6 +146,22 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
             <div className="modal-actions">
               <button type="button" className="btn" onClick={handleDeleteCancel}>Отмена</button>
               <button type="button" className="btn danger" onClick={handleDeleteConfirm}>Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {streamWarnPopup.visible && (
+        <div className="modal-overlay" onClick={handleStreamWarnClose}>
+          <div className="modal delete-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-confirm-icon">⚠</div>
+            <h3>VM должна быть запущена</h3>
+            <p className="modal-vm-name">{streamWarnPopup.vmName || '—'}</p>
+            <p className="delete-confirm-warning">
+              Запустите VM в разделе «Виртуальные машины», затем снова нажмите «Открыть экран».
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={handleStreamWarnClose}>Понятно</button>
             </div>
           </div>
         </div>
