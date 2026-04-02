@@ -17,6 +17,11 @@ function formatDateTimeLocalValue(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
+function formatProfileOption(p) {
+  const net = p.social_network === 'youtube' ? 'YouTube' : 'Instagram';
+  return `${p.vm_name} · ${net}${p.instagram_username ? ` (${p.instagram_username})` : ''}`;
+}
+
 function dateTimeLocalToISOString(value) {
   if (!value) return undefined;
   const [datePart, timePartRaw] = value.split('T');
@@ -37,6 +42,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
   const [showForm, setShowForm] = useState(false);
   const [profileId, setProfileId] = useState('');
   const [mediaPath, setMediaPath] = useState('');
+  const [title, setTitle] = useState('');
   const [caption, setCaption] = useState('');
   const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -49,12 +55,17 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
     d.setMinutes(d.getMinutes() + 10);
     return formatDateTimeLocalValue(d);
   });
+  const selectedProfile = useMemo(
+    () => profiles.find((p) => p.id === profileId) || null,
+    [profiles, profileId]
+  );
+  const isYoutubeProfile = selectedProfile?.social_network === 'youtube';
 
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.mp4')) {
-      showToast('Выберите файл MP4 (рилс)', 'error');
+      showToast('Выберите файл MP4 (Reels / Shorts)', 'error');
       return;
     }
     setUploading(true);
@@ -81,6 +92,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
       await postsApi.create({
         profile_id: profileId,
         media_path: mediaPath,
+        title: isYoutubeProfile ? (title || undefined) : undefined,
         caption: caption || undefined,
         scheduled_at: dateTimeLocalToISOString(scheduledAt),
       });
@@ -88,6 +100,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
       setShowForm(false);
       setProfileId('');
       setMediaPath('');
+      setTitle('');
       setCaption('');
       setSelectedFile(null);
       onSave();
@@ -191,10 +204,22 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             <select value={profileId} onChange={(e) => setProfileId(e.target.value)} required>
               <option value="">— Выберите профиль —</option>
               {profiles.map((p) => (
-                <option key={p.id} value={p.id}>{p.vm_name} ({p.instagram_username || '—'})</option>
+                <option key={p.id} value={p.id}>{formatProfileOption(p)}</option>
               ))}
             </select>
           </div>
+          {isYoutubeProfile && (
+            <div className="post-form-row">
+              <label className="post-form-label">Заголовок (YouTube)</label>
+              <input
+                type="text"
+                className="post-form-input-wide"
+                placeholder="Введите заголовок для Shorts"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </div>
+          )}
           <div className="post-form-row">
             <label className="post-form-label">Видео</label>
             <div className="form-upload">
@@ -246,7 +271,10 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
         {pageItems.map((p) => (
           <div key={p.id} className="post-card">
             <div className="post-card-header">
-              <strong className="post-card-profile">{p.instagram_username || p.profile_id}</strong>
+              <strong className="post-card-profile">
+                {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                {p.instagram_username ? ` · @${p.instagram_username}` : ` · ${p.profile_id}`}
+              </strong>
               <span className={`status ${p.status}`}>{getPostStatusLabel(p.status)}</span>
             </div>
             <div className="post-card-meta">
@@ -256,11 +284,16 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             {p.status === 'published' && (p.post_url || p.instagram_username) && (
               <div className="post-card-link">
                 <a
-                  href={p.post_url || `https://www.instagram.com/${p.instagram_username}`}
+                  href={
+                    p.post_url ||
+                    (p.social_network === 'youtube' && p.instagram_username
+                      ? `https://www.youtube.com/@${String(p.instagram_username).replace(/^@/, '')}`
+                      : `https://www.instagram.com/${p.instagram_username}`)
+                  }
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Открыть пост в Instagram
+                  {p.social_network === 'youtube' ? 'Открыть канал на YouTube' : 'Открыть пост в Instagram'}
                 </a>
               </div>
             )}
@@ -296,7 +329,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             <div className="retry-post-info">
               <div className="retry-post-row">
                 <span className="retry-post-label">Профиль</span>
-                <span>{retryPopup.post.vm_name} ({retryPopup.post.instagram_username || '—'})</span>
+                <span>{formatProfileOption(retryPopup.post)}</span>
               </div>
               <div className="retry-post-row">
                 <span className="retry-post-label">Медиа</span>

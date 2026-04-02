@@ -1,16 +1,20 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { VmManagerService } from '../vm/vm-manager.service';
 import { v4 as uuidv4 } from 'uuid';
 
+export type SocialNetwork = 'instagram' | 'youtube';
+
 export interface CreateProfileDto {
   vm_id: string;
   instagram_username?: string;
+  social_network?: SocialNetwork;
 }
 
 export interface UpdateProfileDto {
   instagram_username?: string;
   instagram_authorized?: boolean;
+  social_network?: SocialNetwork;
 }
 
 @Injectable()
@@ -23,7 +27,7 @@ export class ProfilesService {
   findAll() {
     return this.db.getDb()
       .prepare(
-        `SELECT pr.id, pr.vm_id, pr.instagram_username, pr.instagram_authorized, pr.created_at,
+        `SELECT pr.id, pr.vm_id, pr.instagram_username, pr.social_network, pr.instagram_authorized, pr.created_at,
                 v.name AS vm_name, v.adb_address, v.status AS vm_status
          FROM profile pr JOIN vm v ON v.id = pr.vm_id ORDER BY pr.created_at DESC`,
       )
@@ -33,7 +37,7 @@ export class ProfilesService {
   findOne(id: string) {
     const row = this.db.getDb()
       .prepare(
-        `SELECT pr.*, v.name AS vm_name, v.adb_address, v.status AS vm_status, v.libvirt_domain
+        `SELECT pr.*, v.name AS vm_name, v.adb_address, v.status AS vm_status, v.libvirt_domain, v.mac
          FROM profile pr JOIN vm v ON v.id = pr.vm_id WHERE pr.id = ?`,
       )
       .get(id);
@@ -44,14 +48,23 @@ export class ProfilesService {
   create(dto: CreateProfileDto) {
     if (!dto.vm_id) throw new Error('vm_id обязателен');
     const db = this.db.getDb();
-    const existing = db.prepare('SELECT id FROM profile WHERE vm_id = ?').get(dto.vm_id);
-    if (existing) throw new ConflictException('Профиль для этой VM уже существует');
+    const socialNetwork: SocialNetwork = dto.social_network === 'youtube' ? 'youtube' : 'instagram';
+    const existing = db
+      .prepare('SELECT id FROM profile WHERE vm_id = ? AND social_network = ?')
+      .get(dto.vm_id, socialNetwork);
+    if (existing) {
+      throw new ConflictException(
+        socialNetwork === 'youtube'
+          ? 'Профиль YouTube для этой VM уже существует'
+          : 'Профиль Instagram для этой VM уже существует',
+      );
+    }
     const vmExists = db.prepare('SELECT id FROM vm WHERE id = ?').get(dto.vm_id);
     if (!vmExists) throw new NotFoundException('VM не найдена');
     const id = uuidv4();
     db.prepare(
-      'INSERT INTO profile (id, vm_id, instagram_username, instagram_authorized) VALUES (?, ?, ?, ?)',
-    ).run(id, dto.vm_id, dto.instagram_username ?? null, 0);
+      'INSERT INTO profile (id, vm_id, instagram_username, instagram_authorized, social_network) VALUES (?, ?, ?, ?, ?)',
+    ).run(id, dto.vm_id, dto.instagram_username ?? null, 0, socialNetwork);
     return this.findOne(id);
   }
 
@@ -62,6 +75,23 @@ export class ProfilesService {
       db.prepare('UPDATE profile SET instagram_username = ? WHERE id = ?').run(dto.instagram_username, id);
     if (dto.instagram_authorized !== undefined)
       db.prepare('UPDATE profile SET instagram_authorized = ? WHERE id = ?').run(dto.instagram_authorized ? 1 : 0, id);
+    if (dto.social_network !== undefined) {
+      const sn = dto.social_network === 'youtube' ? 'youtube' : 'instagram';
+      const current = db.prepare('SELECT vm_id FROM profile WHERE id = ?').get(id) as { vm_id: string } | undefined;
+      if (current) {
+        const clash = db
+          .prepare('SELECT id FROM profile WHERE vm_id = ? AND social_network = ? AND id != ?')
+          .get(current.vm_id, sn, id);
+        if (clash) {
+          throw new ConflictException(
+            sn === 'youtube'
+              ? 'Профиль YouTube для этой VM уже существует'
+              : 'Профиль Instagram для этой VM уже существует',
+          );
+        }
+      }
+      db.prepare('UPDATE profile SET social_network = ? WHERE id = ?').run(sn, id);
+    }
     return this.findOne(id);
   }
 
@@ -126,5 +156,32 @@ export class ProfilesService {
       result.stream_web_url = `${base}/#!${hash.toString()}`;
     }
     return result;
+  }
+
+  clearMedia(id: string) {
+    const profile = this.findOne(id) as {
+      adb_address: string | null;
+      libvirt_domain: string;
+      mac: string | null;
+      vm_status: string;
+    };
+    if (profile.vm_status !== 'running') {
+      throw new BadRequestException('Запустите VM перед очисткой медиа.');
+    }
+    let adbAddress = profile.adb_address;
+    if (!adbAddress) {
+      const ip = this.vmManager.getVmIp(profile.libvirt_domain, profile.mac);
+      if (ip) adbAddress = `${ip}:5555`;
+    }
+    if (!adbAddress) {
+      throw new BadRequestException('Не удаётся определить адрес ADB. Укажите adb_address (IP:5555) в настройках VM.');
+    }
+    try {
+      const { remote_dir } = this.vmManager.clearRemoteMediaDir(adbAddress);
+      return { ok: true, remote_dir };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new BadRequestException(msg || 'Не удалось очистить папку с медиа');
+    }
   }
 }

@@ -56,6 +56,11 @@ export class VmController {
     return this.vmService.installInstagram(id, body.apk_path);
   }
 
+  @Post(':id/install-youtube')
+  installYoutube(@Param('id') id: string, @Body() body: { apk_path?: string }) {
+    return this.vmService.installYoutube(id, body.apk_path);
+  }
+
   @Post(':id/apply-proxy')
   applyProxy(@Param('id') id: string, @Body() body?: { pushConfig?: boolean }) {
     this.vmService.applyProxy(id, body?.pushConfig === true);

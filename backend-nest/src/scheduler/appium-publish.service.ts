@@ -12,22 +12,31 @@ const REMOTE_DIR = process.env.REMOTE_MEDIA_DIR || '/sdcard/Download';
 const APPIUM_HOST = process.env.APPIUM_HOST || '127.0.0.1';
 const APPIUM_PORT = parseInt(process.env.APPIUM_PORT || '4723', 10);
 /**
- * Ожидание завершения загрузки после Share/Continue.
- * По умолчанию ждём до 20 минут, ориентируясь на прогресс-бар "keep Instagram open".
+ * После появления «Sharing to Reels…» — максимум времени на исчезновение (фоновая загрузка).
+ * По умолчанию 20 минут.
  */
 const POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
+/** Сколько ждать появления текста «Sharing to Reels» (status_text) после Share/Continue. */
+const SHARING_TO_REELS_APPEAR_TIMEOUT_MS = parseInt(
+  process.env.SHARING_TO_REELS_APPEAR_TIMEOUT_MS || '120000',
+  10,
+);
 /** Интервал опроса индикатора загрузки. */
 const POST_PUBLISH_POLL_MS = parseInt(process.env.POST_PUBLISH_POLL_MS || '3000', 10);
 /** Доп. пауза после завершения загрузки (на всякий случай). */
 const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '0', 10);
-/** Пауза после перехода на вкладку Home перед поиском индикатора "keep Instagram open". */
-const POST_PUBLISH_HOME_DELAY_MS = parseInt(process.env.POST_PUBLISH_HOME_DELAY_MS || '5000', 10);
-/** Сколько ждать появления вкладки Home после закрытия модалки. */
-const HOME_TAB_WAIT_MS = parseInt(process.env.HOME_TAB_WAIT_MS || '20000', 10);
+
+const YOUTUBE_APP_ID = 'com.google.android.youtube';
+const YOUTUBE_HOME_ACTIVITY = 'com.google.android.youtube.app.honeycomb.Shell$HomeActivity';
+/** Ожидание фоновой загрузки на YouTube после публикации (по UI «Uploading» / «Загрузка»). */
+const YOUTUBE_POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.YOUTUBE_POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
 
 /**
  * Публикация Reel: Profile → Create New → Create new reel → выбор видео в галерее → Next (edit) →
  * подпись → Next (share_button) → About Reels: Share → Continue (privacy). Селекторы под версию Instagram.
+ *
+ * YouTube Shorts: Create → «Upload a video» → папка Download → видео → Next → подпись/описание → Publish.
+ * Селекторы могут отличаться по версии приложения — при сбое обновите runYoutubeShortFlow.
  */
 
 function delay(ms: number): Promise<void> {
@@ -38,93 +47,235 @@ function delay(ms: number): Promise<void> {
 export class AppiumPublishService {
   constructor(private readonly vmManager: VmManagerService) {}
 
-  /** Переход на вкладку Home (лента) после публикации. Ждём появления элемента до HOME_TAB_WAIT_MS. */
-  private async openHomeTab(driver: WebdriverIO.Browser): Promise<void> {
-    const homeTabSelectors = [
-      '//*[@resource-id="com.instagram.android:id/feed_tab"]',
-      '//*[@content-desc="Home"][@resource-id="com.instagram.android:id/feed_tab"]',
-      '//*[@content-desc="Home"]',
-      '~Home',
-      'android=new UiSelector().resourceId("com.instagram.android:id/feed_tab")',
-      'android=new UiSelector().description("Home")',
-      '//*[@resource-id="com.instagram.android:id/feed_tab"]//*[@resource-id="com.instagram.android:id/tab_icon"]',
-    ];
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < HOME_TAB_WAIT_MS) {
-      for (const sel of homeTabSelectors) {
-        try {
-          const el = await driver.$(sel);
-          if (el && (await el.isDisplayed())) {
-            await el.click();
-            await delay(2000);
-            return;
-          }
-        } catch {
-          continue;
-        }
-      }
-      await delay(2000);
-    }
-    throw new Error(
-      `Не удалось открыть вкладку Home после публикации за ${HOME_TAB_WAIT_MS}мс. Селекторы: feed_tab, content-desc="Home".`,
-    );
-  }
-
-  private async waitForInstagramPostingToFinish(driver: WebdriverIO.Browser): Promise<void> {
-    if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
-
-    const startedAt = Date.now();
-    const progressBarSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_progress_bar"]';
-    const statusContainerSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_status_container"]';
-
-    while (Date.now() - startedAt < POST_PUBLISH_TIMEOUT_MS) {
-      let uploading = false;
-      try {
-        const pb = await driver.$(progressBarSel);
-        uploading = pb ? await pb.isDisplayed() : false;
-      } catch {
-        uploading = false;
-      }
-
-      if (!uploading) {
-        try {
-          const container = await driver.$(statusContainerSel);
-          uploading = container ? await container.isDisplayed() : false;
-        } catch {
-          uploading = false;
-        }
-      }
-
-      if (!uploading) return;
-      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
-    }
-
-    throw new Error(
-      `Instagram не завершил публикацию за ${POST_PUBLISH_TIMEOUT_MS}мс (индикатор загрузки всё ещё виден).`,
-    );
-  }
-
-  /** Клик чуть выше середины экрана, чтобы закрыть возможное модальное окно после Share/Continue. */
-  private async dismissModalTapAboveCenter(driver: WebdriverIO.Browser): Promise<void> {
+  /** Экран загрузки Reels: com.instagram.android:id/status_text — «Sharing to Reels…». */
+  private async isSharingToReelsUiVisible(driver: WebdriverIO.Browser): Promise<boolean> {
+    const statusSel = '//*[@resource-id="com.instagram.android:id/status_text"]';
     try {
-      const { width, height } = await driver.getWindowSize();
-      const x = Math.floor(width / 2);
-      const y = Math.floor(height * 0.4);
-      await driver.execute('mobile: clickGesture', { x, y });
-      await delay(1500);
+      const el = await driver.$(statusSel);
+      if (!el || !(await el.isDisplayed())) return false;
+      const text = ((await el.getText()) || '').toLowerCase();
+      return text.includes('sharing') && text.includes('reel');
     } catch {
-      // Игнорируем: модалки может не быть или другой драйвер
+      return false;
     }
   }
 
   /**
-   * После Share/Continue: закрытие модалки (тап) → переход на Home → пауза → поиск индикатора "keep Instagram open" → ожидание окончания загрузки.
+   * После Share/Continue: ждём появления «Sharing to Reels…», затем — пока блок загрузки не исчезнет.
    */
+  private async waitForSharingToReelsToFinish(driver: WebdriverIO.Browser): Promise<void> {
+    if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
+
+    const startedAt = Date.now();
+    let seenSharing = false;
+    let firstSeenAt: number | null = null;
+
+    while (true) {
+      const now = Date.now();
+      const visible = await this.isSharingToReelsUiVisible(driver);
+
+      if (visible) {
+        if (firstSeenAt === null) firstSeenAt = now;
+        seenSharing = true;
+      } else if (seenSharing) {
+        return;
+      }
+
+      if (!seenSharing) {
+        if (now - startedAt >= SHARING_TO_REELS_APPEAR_TIMEOUT_MS) {
+          throw new Error(
+            `Не появился индикатор «Sharing to Reels…» (com.instagram.android:id/status_text) за ${SHARING_TO_REELS_APPEAR_TIMEOUT_MS}мс.`,
+          );
+        }
+      } else if (firstSeenAt !== null && now - firstSeenAt >= POST_PUBLISH_TIMEOUT_MS) {
+        throw new Error(
+          `Instagram не завершил загрузку Reels за ${POST_PUBLISH_TIMEOUT_MS}мс после появления индикатора (текст «Sharing to Reels…» всё ещё виден).`,
+        );
+      }
+
+      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
+    }
+  }
+
+  /** После Share/Continue: ожидание завершения фоновой публикации Reels по UI «Sharing to Reels…». */
   private async waitForPublishCompletion(driver: WebdriverIO.Browser): Promise<void> {
-    await this.dismissModalTapAboveCenter(driver);
-    await this.openHomeTab(driver);
-    await delay(POST_PUBLISH_HOME_DELAY_MS);
-    await this.waitForInstagramPostingToFinish(driver);
+    await this.waitForSharingToReelsToFinish(driver);
+  }
+
+  private async waitForYoutubeUploadFinish(driver: WebdriverIO.Browser): Promise<void> {
+    if (!(YOUTUBE_POST_PUBLISH_TIMEOUT_MS > 0)) return;
+    const startedAt = Date.now();
+    let seenUploading = false;
+    let seenUploaded = false;
+    while (Date.now() - startedAt < YOUTUBE_POST_PUBLISH_TIMEOUT_MS) {
+      let uploadingVisible = false;
+      const hints = [
+        '//android.widget.TextView[contains(@text,"Uploading")]',
+        '//android.widget.TextView[contains(@text,"Загрузка")]',
+        '//*[contains(@text,"Uploading")]',
+      ];
+      for (const xp of hints) {
+        try {
+          const el = await driver.$(xp);
+          if (el && (await el.isDisplayed())) {
+            uploadingVisible = true;
+            seenUploading = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Snackbar "Uploaded to Your Channel" (completion)
+      const uploadedHints = [
+        '//*[@resource-id="com.google.android.youtube:id/message" and (contains(@text,"Uploaded to Your Channel") or contains(@text,"Uploaded"))]',
+        '//*[@resource-id="com.google.android.youtube:id/message" and (contains(@text,"Загружено") or contains(@text,"канал"))]',
+        '//*[@resource-id="com.google.android.youtube:id/youtube_snackbar"]//*[@resource-id="com.google.android.youtube:id/message"]',
+        '//*[contains(@text,"Uploaded to Your Channel")]',
+      ];
+      for (const xp of uploadedHints) {
+        try {
+          const el = await driver.$(xp);
+          if (el && (await el.isDisplayed())) {
+            seenUploaded = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (seenUploaded) {
+        // даём UI стабилизироваться, чтобы Publisher успел корректно завершить сессию
+        await delay(3000);
+        return;
+      }
+
+      if (seenUploading && !uploadingVisible) {
+        if (POST_PUBLISH_DELAY_MS > 0) await delay(POST_PUBLISH_DELAY_MS);
+        await delay(5000);
+        // Иногда snackbar появляется чуть позже исчезновения "Uploading"
+        for (let i = 0; i < 10; i++) {
+          for (const xp of uploadedHints) {
+            try {
+              const el = await driver.$(xp);
+              if (el && (await el.isDisplayed())) {
+                await delay(1500);
+                return;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          await delay(500);
+        }
+        return;
+      }
+      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
+    }
+  }
+
+  private resolveYoutubeLaunchActivities(adbAddress: string): string[] {
+    const candidates = [YOUTUBE_HOME_ACTIVITY];
+    try {
+      const out = execSync(`adb -s ${adbAddress} shell cmd package resolve-activity --brief ${YOUTUBE_APP_ID}`, {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const lines = out
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const launchLine = lines.find((line) => line.includes('/'));
+      if (launchLine) {
+        const [, rawActivity = ''] = launchLine.split('/');
+        const normalizedActivity = rawActivity.startsWith('.')
+          ? `${YOUTUBE_APP_ID}${rawActivity}`
+          : rawActivity;
+        if (normalizedActivity) candidates.unshift(normalizedActivity);
+      }
+    } catch {
+      // fallback below
+    }
+    return [...new Set(candidates)];
+  }
+
+  private async launchYoutubeApp(driver: WebdriverIO.Browser, adbAddress: string): Promise<void> {
+    const isYoutubeForeground = async (): Promise<boolean> => {
+      try {
+        const pkg = await (driver as unknown as { getCurrentPackage(): Promise<string> }).getCurrentPackage();
+        return pkg === YOUTUBE_APP_ID;
+      } catch {
+        return false;
+      }
+    };
+    const waitYoutubeForeground = async (timeoutMs: number): Promise<boolean> => {
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        if (await isYoutubeForeground()) return true;
+        await delay(300);
+      }
+      return false;
+    };
+    const activities = this.resolveYoutubeLaunchActivities(adbAddress);
+    let lastError: unknown;
+    for (const activity of activities) {
+      try {
+        execSync(`adb -s ${adbAddress} shell am start -n ${YOUTUBE_APP_ID}/${activity}`, {
+          encoding: 'utf8',
+          timeout: 15000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        if (await waitYoutubeForeground(7000)) return;
+      } catch (err) {
+        lastError = err;
+      }
+      try {
+        await driver.execute('mobile: startActivity', {
+          appPackage: YOUTUBE_APP_ID,
+          appActivity: activity,
+        });
+        if (await waitYoutubeForeground(7000)) return;
+      } catch (err) {
+        lastError = err;
+      }
+      try {
+        await driver.execute('mobile: startActivity', {
+          intent: `-n ${YOUTUBE_APP_ID}/${activity}`,
+        });
+        if (await waitYoutubeForeground(7000)) return;
+      } catch (err) {
+        lastError = err;
+      }
+      try {
+        execSync(`adb -s ${adbAddress} shell monkey -p ${YOUTUBE_APP_ID} -c android.intent.category.LAUNCHER 1`, {
+          encoding: 'utf8',
+          timeout: 10000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        if (await waitYoutubeForeground(7000)) return;
+      } catch (err) {
+        lastError = err;
+      }
+      try {
+        execSync(
+          `adb -s ${adbAddress} shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${YOUTUBE_APP_ID}/${activity}`,
+          {
+            encoding: 'utf8',
+            timeout: 10000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
+        if (await waitYoutubeForeground(7000)) return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw new Error(
+      `Не удалось запустить YouTube (${YOUTUBE_APP_ID}) через adb am start и startActivity. Проверьте appActivity и установку приложения. Причина: ${String(lastError)}`,
+    );
   }
 
   /**
@@ -181,47 +332,10 @@ export class AppiumPublishService {
     return remotePath;
   }
 
-  /**
-   * Публикация Reel: post.media_path → adb push в /sdcard/Download → в пикере выбор первого элемента в галерее.
-   */
-  async publishWithAppium(
+  private async runInstagramReelFlow(
+    driver: WebdriverIO.Browser,
     post: { id: string; media_path: string; caption: string | null },
-    adbAddress: string,
   ): Promise<void> {
-    this.vmManager.adbConnect(adbAddress);
-    await delay(1000);
-    const remotePath = this.pushMediaToDevice(adbAddress, post.media_path);
-    await delay(POST_PUSH_DELAY_MS);
-
-    // Appium ищет устройство в adb devices — повторный connect перед сессией
-    this.vmManager.adbConnect(adbAddress);
-    await delay(2000);
-
-    let wdio: typeof import('webdriverio');
-    try {
-      wdio = await import('webdriverio');
-    } catch {
-      throw new Error(
-        'WebdriverIO не установлен. Выполните: npm install webdriverio @wdio/appium-service (в backend-nest).',
-      );
-    }
-
-    const driver = await wdio.remote({
-      hostname: APPIUM_HOST,
-      port: APPIUM_PORT,
-      path: '/',
-      capabilities: {
-        platformName: 'Android',
-        'appium:automationName': 'UiAutomator2',
-        'appium:udid': adbAddress,
-        'appium:noReset': true,
-        'appium:adbExecTimeout': 60000, // adb shell на VM может отвечать медленно
-      },
-      connectionRetryCount: 3,
-      connectionRetryTimeout: 180000, // 3 мин — UiAutomator2 на VM может долго стартовать
-    });
-
-    try {
       await driver.activateApp('com.instagram.android');
       await delay(ACTION_DELAY_MS);
 
@@ -598,6 +712,591 @@ export class AppiumPublishService {
 
       if (POST_PUBLISH_DELAY_MS > 0) {
         await delay(POST_PUBLISH_DELAY_MS);
+      }
+  }
+
+
+  private async runYoutubeShortFlow(
+    driver: WebdriverIO.Browser,
+    adbAddress: string,
+    post: { id: string; media_path: string; title: string | null; caption: string | null },
+    attempt = 0,
+  ): Promise<void> {
+    await this.launchYoutubeApp(driver, adbAddress);
+
+    const clickFirstVisible = async (selectors: string[]): Promise<boolean> => {
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+    const isDocumentsUiVisible = async (): Promise<boolean> => {
+      const selectors = [
+        '//*[contains(@resource-id,"documentsui:id/dir_list")]',
+        '//*[contains(@resource-id,"documentsui:id/toolbar")]',
+        '//*[contains(@resource-id,"documentsui:id/thumbnail")]',
+        '//*[contains(@text,"Recent")]',
+        '//*[contains(@text,"Modified")]',
+        'android=new UiSelector().resourceIdMatches(".*documentsui:id/dir_list")',
+        'android=new UiSelector().resourceIdMatches(".*documentsui:id/thumbnail")',
+      ];
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) return true;
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+    const openUploadPicker = async (): Promise<boolean> => {
+      if (await isDocumentsUiVisible()) return true;
+      const uploadEntrySelectors = [
+        '//*[@content-desc="Upload"]',
+        '//*[@content-desc="Upload a video"]',
+        '~Upload',
+        '~Upload a video',
+        '//*[contains(@text,"Upload a video")]',
+        '//*[contains(@text,"Upload video")]',
+        '//*[contains(@text,"Загрузить видео")]',
+        '//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]//*[@content-desc="Upload"]',
+        '(//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]//android.view.ViewGroup)[3]',
+      ];
+      for (const sel of uploadEntrySelectors) {
+        if (await clickFirstVisible([sel])) {
+          await delay(1200);
+          if (await isDocumentsUiVisible()) return true;
+        }
+      }
+      // fallback: тап по вероятному месту пункта Upload в bottom sheet
+      try {
+        const rect = await driver.getWindowRect();
+        const x = Math.round(rect.width * 0.5);
+        const y = Math.round(rect.height * 0.83);
+        await driver.execute('mobile: clickGesture', { x, y });
+        await delay(1200);
+        if (await isDocumentsUiVisible()) return true;
+      } catch {
+        // ignore
+      }
+      return await isDocumentsUiVisible();
+    };
+
+    // 1) Create
+    const createSelectors = [
+      '//android.widget.Button[@content-desc="Create"]',
+      '//android.widget.Button[@content-desc="Создать"]',
+      '//*[@content-desc="Create"]',
+      '//*[@content-desc="Создать"]',
+      '~Create',
+      'android=new UiSelector().description("Create")',
+      'android=new UiSelector().descriptionContains("Create")',
+      'android=new UiSelector().descriptionContains("Созд")',
+      '//*[@resource-id="com.google.android.youtube:id/image"]',
+      '//*[@resource-id="com.google.android.youtube:id/image"]/ancestor::android.widget.Button[1]',
+    ];
+    let createTapped = await clickFirstVisible(createSelectors);
+    if (!createTapped) {
+      try {
+        const rect = await driver.getWindowRect();
+        const x = Math.round(rect.width / 2);
+        const y = Math.round(rect.height * 0.93);
+        await driver.execute('mobile: clickGesture', { x, y });
+        createTapped = true;
+      } catch {
+        // ignore and fallback to adb tap below
+      }
+    }
+    if (!createTapped) {
+      try {
+        execSync(`adb -s ${adbAddress} shell input tap 540 2230`, {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        createTapped = true;
+      } catch {
+        // ignore
+      }
+    }
+    if (!createTapped) {
+      throw new Error('Не найдена кнопка Create в YouTube (включая fallback по иконке и координатам).');
+    }
+    console.log('[YT] Create tapped');
+    await delay(ACTION_DELAY_MS);
+    if (!(await openUploadPicker())) {
+      console.warn('[YT] Upload picker not detected after Create, trying direct tile taps');
+    } else {
+      console.log('[YT] Upload picker detected');
+    }
+
+    // 2) В picker: двойной клик по последнему видео.
+    const pickLastVideoDoubleClick = async (): Promise<boolean> => {
+      const titleVisible = async (): Promise<boolean> => {
+        const selectors = [
+          '//android.widget.EditText[contains(@text,"Create a title")]',
+          '//android.widget.EditText[contains(@text,"Title")]',
+          '//*[@resource-id="com.google.android.youtube:id/loading_frame_layout"]',
+        ];
+        for (const sel of selectors) {
+          try {
+            const el = await driver.$(sel);
+            if (el && (await el.isDisplayed())) return true;
+          } catch {
+            continue;
+          }
+        }
+        return false;
+      };
+      const tapBoundsCenterTwice = (bounds: string): boolean => {
+        const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+        if (!m) return false;
+        const x1 = parseInt(m[1], 10);
+        const y1 = parseInt(m[2], 10);
+        const x2 = parseInt(m[3], 10);
+        const y2 = parseInt(m[4], 10);
+        const x = Math.round((x1 + x2) / 2);
+        const y = Math.round((y1 + y2) / 2);
+        execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return true;
+      };
+      // 0) Самый надежный путь: парсим XML и тапаем по bounds ПЕРВОГО элемента (новейший в списке).
+      try {
+        const src = await driver.getPageSource();
+        const boundsMatches: string[] = [];
+        const nodeRe = /<node\b[^>]*\/>/g;
+        const nodes = src.match(nodeRe) || [];
+        for (const node of nodes) {
+          const hasThumbId = node.includes('resource-id="com.android.documentsui:id/thumbnail"');
+          const hasIconThumb = node.includes('resource-id="com.android.documentsui:id/icon_thumb"');
+          const hasIconMime = node.includes('resource-id="com.android.documentsui:id/icon_mime_lg"');
+          if (!hasThumbId && !hasIconThumb && !hasIconMime) continue;
+          // Приоритет: сначала thumbnail, затем icon_thumb/icon_mime.
+          if (!hasThumbId && boundsMatches.length > 0) continue;
+          const b = node.match(/bounds="(\[[^\"]+\])"/);
+          if (b?.[1]) boundsMatches.push(b[1]);
+        }
+        if (boundsMatches.length) {
+          const firstBounds = boundsMatches[0];
+          if (tapBoundsCenterTwice(firstBounds)) {
+            await delay(2500);
+            if ((await titleVisible()) || !(await isDocumentsUiVisible())) {
+              console.log('[YT] Video picked by first bounds');
+              return true;
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+      // 0.1) Явно пробуем первый LinearLayout в списке dir_list (как в вашей разметке).
+      try {
+        const firstRowSelectors = [
+          '//*[contains(@resource-id,"documentsui:id/dir_list")]/android.widget.LinearLayout[1]',
+          '(//*[contains(@resource-id,"documentsui:id/dir_list")]//android.widget.LinearLayout)[1]',
+          '(//*[@resource-id="com.android.documentsui:id/dir_list"]/android.widget.LinearLayout)[1]',
+        ];
+        for (const sel of firstRowSelectors) {
+          const row = await driver.$(sel);
+          if (!row) continue;
+          await row.click();
+          await delay(180);
+          await row.click();
+          await delay(2200);
+          if ((await titleVisible()) || !(await isDocumentsUiVisible())) {
+            console.log('[YT] Video picked by first LinearLayout');
+            return true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      // Пробуем координатный выбор сразу (экран Recent на части устройств не всегда хорошо матчится селекторами).
+      try {
+        const rect = await driver.getWindowRect();
+        const y = Math.round(rect.height * 0.26);
+        // Сначала первая плитка (первая запись), затем следующая.
+        const xs = [Math.round(rect.width * 0.12), Math.round(rect.width * 0.25)];
+        for (const x of xs) {
+          execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          await delay(220);
+          execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          await delay(2200);
+          if ((await titleVisible()) || !(await isDocumentsUiVisible())) {
+            console.log('[YT] Video picked by coordinate double-tap');
+            return true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      const candidateXpaths = [
+        '//*[contains(@resource-id,"documentsui:id/dir_list")]//*[contains(@resource-id,"documentsui:id/thumbnail")]',
+        '//*[contains(@resource-id,"documentsui:id/thumbnail")]',
+        '//*[contains(@resource-id,"documentsui:id/thumbnail")]/ancestor::android.widget.LinearLayout[1]',
+        '//*[contains(@resource-id,"documentsui:id/icon_thumb")]/ancestor::*[contains(@resource-id,"documentsui:id/thumbnail")][1]',
+        '//*[contains(@resource-id,"documentsui:id/thumbnail")]/..',
+        '//android.widget.FrameLayout[contains(@resource-id,"documentsui:id/thumbnail")]',
+        '//*[contains(@resource-id,"documentsui:id/dir_list")]/android.widget.LinearLayout',
+        '//android.support.v7.widget.RecyclerView//*[contains(@resource-id,"thumbnail")]',
+        '//android.widget.ImageView[contains(@resource-id,"icon_thumb")]',
+      ];
+      for (const xp of candidateXpaths) {
+        try {
+          const els = await driver.$$(xp);
+          const elsCount = await els.length;
+          if (!elsCount) continue;
+          // Выбираем сначала первый элемент списка (новейший), затем последующие.
+          for (let i = 0; i < elsCount; i++) {
+            const target = await els[i];
+            try {
+              await target.click();
+              await delay(180);
+              await target.click();
+            } catch {
+              const loc = await target.getLocation();
+              const size = await target.getSize();
+              const x = Math.round(loc.x + size.width / 2);
+              const y = Math.round(loc.y + size.height / 2);
+              execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+                encoding: 'utf8',
+                timeout: 5000,
+                stdio: ['pipe', 'pipe', 'pipe'],
+              });
+              await delay(180);
+              execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+                encoding: 'utf8',
+                timeout: 5000,
+                stdio: ['pipe', 'pipe', 'pipe'],
+              });
+            }
+            await delay(2000);
+            if ((await titleVisible()) || !(await isDocumentsUiVisible())) {
+              console.log('[YT] Video picked by element double-tap');
+              return true;
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+      // Жесткий fallback: 2 плитки в первой строке (как на вашем скрине Recent).
+      try {
+        const rect = await driver.getWindowRect();
+        // Сначала правая плитка (последняя), затем левая.
+        const y = Math.round(rect.height * 0.26);
+        const xs = [Math.round(rect.width * 0.25), Math.round(rect.width * 0.12)];
+        for (const x of xs) {
+          execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          await delay(180);
+          execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+            encoding: 'utf8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          await delay(2000);
+          if ((await titleVisible()) || !(await isDocumentsUiVisible())) {
+            console.log('[YT] Video picked by fallback tile taps');
+            return true;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    };
+    const mediaName = path.basename(post.media_path);
+    if (!(await pickLastVideoDoubleClick())) {
+      throw new Error(
+        `Не удалось выбрать последнее видео двойным кликом в системной галерее. Файл: "${mediaName}".`,
+      );
+    }
+
+    // 3) Create title
+    const titleText = (post.title || '').trim() || path.parse(post.media_path).name;
+    const adbEscapeText = (s: string): string =>
+      s
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/ /g, '%s')
+        .replace(/[&|<>;$`]/g, '');
+    const readCurrentPackage = async (): Promise<string> => {
+      try {
+        return await (driver as unknown as { getCurrentPackage(): Promise<string> }).getCurrentPackage();
+      } catch {
+        return '';
+      }
+    };
+    const tryFillTitleFromPageSource = async (): Promise<boolean> => {
+      try {
+        const src = await driver.getPageSource();
+        const patterns = [
+          /<node\b[^>]*class="android\.widget\.EditText"[^>]*text="Create a title"[^>]*bounds="(\[[^\"]+\])"[^>]*\/>/,
+          /<node\b[^>]*text="Create a title"[^>]*class="android\.widget\.EditText"[^>]*bounds="(\[[^\"]+\])"[^>]*\/>/,
+          /<node\b[^>]*class="android\.widget\.EditText"[^>]*bounds="(\[[^\"]+\])"[^>]*\/>/g,
+        ];
+        let bounds = '';
+        const m1 = src.match(patterns[0]);
+        const m2 = src.match(patterns[1]);
+        if (m1?.[1]) bounds = m1[1];
+        else if (m2?.[1]) bounds = m2[1];
+        else {
+          const all = Array.from(src.matchAll(patterns[2] as RegExp));
+          if (all.length) bounds = all[all.length - 1][1];
+        }
+        if (!bounds) return false;
+        const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+        if (!m) return false;
+        const x = Math.round((parseInt(m[1], 10) + parseInt(m[3], 10)) / 2);
+        const y = Math.round((parseInt(m[2], 10) + parseInt(m[4], 10)) / 2);
+        execSync(`adb -s ${adbAddress} shell input tap ${x} ${y}`, {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        await delay(300);
+        execSync(`adb -s ${adbAddress} shell input text "${adbEscapeText(titleText)}"`, {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    // На некоторых прошивках экран после выбора видео появляется с заметной задержкой.
+    for (let i = 0; i < 30; i++) {
+      if (await tryFillTitleFromPageSource()) {
+        console.log('[YT] Title filled via pageSource wait');
+        break;
+      }
+      await delay(500);
+    }
+    const titleSelectors = [
+      '//android.widget.EditText[contains(@text,"Create a title")]',
+      '//android.widget.EditText[contains(@text,"Title")]',
+      'android=new UiSelector().className("android.widget.EditText").instance(0)',
+      'android=new UiSelector().className("android.widget.EditText")',
+      '//android.widget.EditText',
+    ];
+    let titleFilled = false;
+    for (const sel of titleSelectors) {
+      try {
+        const field = await driver.$(sel);
+        if (field) {
+          await field.click();
+          await field.setValue(titleText);
+          titleFilled = true;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (!titleFilled) {
+      titleFilled = await tryFillTitleFromPageSource();
+    }
+    if (!titleFilled) {
+      const pkg = await readCurrentPackage();
+      if (pkg.includes('launcher')) {
+        console.warn('[YT] Unexpected launcher foreground, relaunching YouTube before title fill');
+        await this.launchYoutubeApp(driver, adbAddress);
+        await delay(2000);
+        titleFilled = await tryFillTitleFromPageSource();
+      }
+    }
+    if (!titleFilled) {
+      const pkg = await readCurrentPackage();
+      if (attempt < 1 && pkg.includes('launcher')) {
+        console.warn('[YT] Retrying full YouTube flow after launcher fallback');
+        await this.runYoutubeShortFlow(driver, adbAddress, post, attempt + 1);
+        return;
+      }
+      throw new Error('Не найдено поле Create a title для YouTube Shorts.');
+    }
+    console.log('[YT] Title filled');
+    await delay(1200);
+
+    // 4) Show more
+    const showMoreSelectors = [
+      '//*[@content-desc="Show more"]',
+      '//*[@content-desc="Показать больше"]',
+      '//*[contains(@text,"Show more")]',
+    ];
+    if (!(await clickFirstVisible(showMoreSelectors))) {
+      throw new Error('Не найдена кнопка Show more на экране деталей YouTube.');
+    }
+    await delay(1500);
+
+    // 5) Открываем пункт "Add description" (а не "Select audience").
+    const descriptionEntrySelectors = [
+      // Text-based (best effort across languages)
+      '//*[contains(@text,"Add description")]',
+      '//*[contains(@content-desc,"Add description")]',
+      '//*[contains(@text,"Добавить описание")]',
+      '//*[contains(@content-desc,"Добавить описание")]',
+
+      // Click parent container (ViewGroup) that holds the text.
+      '//android.view.ViewGroup[.//*[contains(@text,"Add description")]]',
+      '//android.view.ViewGroup[.//*[contains(@content-desc,"Add description")]]',
+      '//android.view.ViewGroup[.//*[contains(@text,"Добавить описание")]]',
+      '//android.view.ViewGroup[.//*[contains(@content-desc,"Добавить описание")]]',
+
+      // Ordinal fallback: 11-й android.view.ViewGroup в списке деталей (как вы попросили).
+      '(//*[@resource-id="com.google.android.youtube:id/recycler_view"]//android.view.ViewGroup)[11]',
+    ];
+    if (!(await clickFirstVisible(descriptionEntrySelectors))) {
+      throw new Error('Не удалось открыть пункт описания ("Add description") в Show more.');
+    }
+    await delay(1500);
+
+    // 6) Ввод description (подпись) + Back
+    const descriptionText = (post.caption || '').trim();
+    if (descriptionText) {
+      const descriptionSelectors = [
+        '//*[@resource-id="com.google.android.youtube:id/loading_frame_layout"]//android.widget.EditText',
+        '//android.view.ViewGroup[@content-desc="Back"]/ancestor::android.view.ViewGroup[1]//android.widget.EditText',
+        '//android.widget.EditText',
+        'android=new UiSelector().className("android.widget.EditText").instance(0)',
+      ];
+      let descriptionFilled = false;
+      for (const sel of descriptionSelectors) {
+        try {
+          const field = await driver.$(sel);
+          if (field && (await field.isDisplayed())) {
+            await field.click();
+            await field.setValue(descriptionText);
+            descriptionFilled = true;
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+      if (!descriptionFilled) {
+        throw new Error('Не найдено поле EditText для ввода описания Shorts.');
+      }
+    }
+    await delay(800);
+    const backSelectors = ['//*[@content-desc="Back"]', '~Back', 'android=new UiSelector().description("Back")'];
+    if (!(await clickFirstVisible(backSelectors))) {
+      await driver.back();
+    }
+    await delay(1200);
+
+    // 7) Upload
+    const uploadSelectors = [
+      '//*[@resource-id="com.google.android.youtube:id/upload_bottom_button"]',
+      '//*[@text="Upload"]',
+      '~Upload',
+      '//*[@content-desc="Upload"]',
+    ];
+    if (!(await clickFirstVisible(uploadSelectors))) {
+      throw new Error('Не найдена кнопка Upload на экране публикации YouTube.');
+    }
+    await delay(1500);
+
+    // 8) Модалка аудитории: No (8-й ViewGroup), затем Upload.
+    const modalNoSelectors = [
+      // В вашем UI: 4-й пункт ViewGroup внутри ViewGroup в bottom_sheet_list.
+      '(//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]/android.view.ViewGroup/android.view.ViewGroup)[4]',
+      '(//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]/android.view.ViewGroup[1]/android.view.ViewGroup)[4]',
+      '(//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]/android.view.ViewGroup[1]/android.view.ViewGroup)[3]',
+      '(//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]/android.view.ViewGroup[1]/android.view.ViewGroup)[5]',
+      '//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]//*[@content-desc="No"]',
+      '//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]//*[contains(@text,"not made for kids")]',
+      '//*[@resource-id="com.google.android.youtube:id/bottom_sheet_list"]//*[contains(@text,"No")]',
+    ];
+    if (!(await clickFirstVisible(modalNoSelectors))) {
+      throw new Error('Не найден выбор "No" в модальном окне YouTube.');
+    }
+    await delay(1200);
+    if (!(await clickFirstVisible(uploadSelectors))) {
+      throw new Error('Не найдена финальная кнопка Upload после выбора аудитории.');
+    }
+    await delay(ACTION_DELAY_MS);
+
+    await delay(ACTION_DELAY_MS * 2);
+    await this.waitForYoutubeUploadFinish(driver);
+    if (POST_PUBLISH_DELAY_MS > 0) await delay(POST_PUBLISH_DELAY_MS);
+  }
+
+  /**
+   * Публикация: adb push mp4 → Reels (Instagram) или Shorts (YouTube) по профилю.
+   */
+  async publishWithAppium(
+    post: { id: string; media_path: string; title: string | null; caption: string | null },
+    adbAddress: string,
+    socialNetwork: 'instagram' | 'youtube' = 'instagram',
+  ): Promise<void> {
+    this.vmManager.adbConnect(adbAddress);
+    await delay(1000);
+    this.pushMediaToDevice(adbAddress, post.media_path);
+    await delay(POST_PUSH_DELAY_MS);
+
+    this.vmManager.adbConnect(adbAddress);
+    await delay(2000);
+
+    let wdio: typeof import('webdriverio');
+    try {
+      wdio = await import('webdriverio');
+    } catch {
+      throw new Error(
+        'WebdriverIO не установлен. Выполните: npm install webdriverio @wdio/appium-service (в backend-nest).',
+      );
+    }
+
+    const driver = await wdio.remote({
+      hostname: APPIUM_HOST,
+      port: APPIUM_PORT,
+      path: '/',
+      capabilities: {
+        platformName: 'Android',
+        'appium:automationName': 'UiAutomator2',
+        'appium:udid': adbAddress,
+        'appium:noReset': true,
+        'appium:adbExecTimeout': 60000,
+      },
+      connectionRetryCount: 3,
+      connectionRetryTimeout: 180000,
+    });
+
+    try {
+      if (socialNetwork === 'youtube') {
+        await this.runYoutubeShortFlow(driver, adbAddress, post);
+      } else {
+        await this.runInstagramReelFlow(driver, post);
       }
     } finally {
       await driver.deleteSession();

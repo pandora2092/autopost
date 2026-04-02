@@ -24,7 +24,7 @@ export class VmService {
   findAll() {
     const db = this.db.getDb();
     const rows = db.prepare(
-      `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.instagram_installed, v.created_at,
+      `SELECT v.id, v.name, v.libvirt_domain, v.mac, v.proxy_id, v.adb_address, v.android_id, v.status, v.instagram_installed, v.youtube_installed, v.created_at,
               p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port
        FROM vm v LEFT JOIN proxy p ON p.id = v.proxy_id ORDER BY v.created_at DESC`,
     ).all() as { id: string; libvirt_domain: string; status: string }[];
@@ -150,6 +150,24 @@ export class VmService {
     }
     const { output } = this.vmManager.installInstagram(adbAddress, apkPath);
     this.db.getDb().prepare('UPDATE vm SET instagram_installed = 1 WHERE id = ?').run(id);
+    return { ok: true, adb_address: adbAddress, output };
+  }
+
+  installYoutube(id: string, apkPath?: string) {
+    const vm = this.db.getDb()
+      .prepare('SELECT id, adb_address, libvirt_domain FROM vm WHERE id = ?')
+      .get(id) as { id: string; adb_address: string | null; libvirt_domain: string } | undefined;
+    if (!vm) throw new NotFoundException('VM не найдена');
+    let adbAddress = vm.adb_address;
+    if (!adbAddress) {
+      const ip = this.vmManager.getVmIp(vm.libvirt_domain);
+      if (ip) adbAddress = `${ip}:5555`;
+    }
+    if (!adbAddress) {
+      throw new Error('Не известен adb_address. Запустите VM и укажите adb_address (IP:5555).');
+    }
+    const { output } = this.vmManager.installYoutube(adbAddress, apkPath);
+    this.db.getDb().prepare('UPDATE vm SET youtube_installed = 1 WHERE id = ?').run(id);
     return { ok: true, adb_address: adbAddress, output };
   }
 

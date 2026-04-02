@@ -9,7 +9,7 @@ export class SystemService {
   getQueue() {
     const db = this.db.getDb();
     const pending = db.prepare(`
-      SELECT s.id, s.profile_id, s.scheduled_at, s.status, pr.instagram_username, v.name AS vm_name
+      SELECT s.id, s.profile_id, s.scheduled_at, s.status, pr.instagram_username, pr.social_network, v.name AS vm_name
       FROM scheduled_post s
       JOIN profile pr ON pr.id = s.profile_id
       JOIN vm v ON v.id = pr.vm_id
@@ -18,7 +18,7 @@ export class SystemService {
     `).all();
     const byStatus = db.prepare('SELECT status, COUNT(*) AS count FROM scheduled_post GROUP BY status').all();
     const recent = db.prepare(`
-      SELECT s.id, s.profile_id, s.published_at, s.status, pr.instagram_username
+      SELECT s.id, s.profile_id, s.published_at, s.status, pr.instagram_username, pr.social_network
       FROM scheduled_post s
       JOIN profile pr ON pr.id = s.profile_id
       WHERE s.status = 'published'

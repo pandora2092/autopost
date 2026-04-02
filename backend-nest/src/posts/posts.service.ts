@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 export interface CreatePostDto {
   profile_id: string;
   media_path: string;
+  title?: string;
   caption?: string;
   scheduled_at?: string;
 }
@@ -13,6 +14,7 @@ export interface CreatePostDto {
 export interface UpdatePostDto {
   status?: string;
   scheduled_at?: string;
+  title?: string;
   caption?: string;
 }
 
@@ -25,8 +27,8 @@ export class PostsService {
 
   findAll(status?: string, profile_id?: string) {
     let sql = `
-      SELECT s.id, s.profile_id, s.media_path, s.caption, s.scheduled_at, s.status, s.assigned_at, s.published_at, s.post_url, s.error_message, s.created_at,
-             pr.instagram_username, v.name AS vm_name
+      SELECT s.id, s.profile_id, s.media_path, s.title, s.caption, s.scheduled_at, s.status, s.assigned_at, s.published_at, s.post_url, s.error_message, s.created_at,
+             pr.instagram_username, pr.social_network, v.name AS vm_name
       FROM scheduled_post s
       JOIN profile pr ON pr.id = s.profile_id
       JOIN vm v ON v.id = pr.vm_id
@@ -48,7 +50,7 @@ export class PostsService {
   findOne(id: string) {
     const row = this.db.getDb()
       .prepare(
-        `SELECT s.*, pr.instagram_username, pr.vm_id, v.name AS vm_name
+        `SELECT s.*, pr.instagram_username, pr.social_network, pr.vm_id, v.name AS vm_name
          FROM scheduled_post s
          JOIN profile pr ON pr.id = s.profile_id
          JOIN vm v ON v.id = pr.vm_id
@@ -67,8 +69,8 @@ export class PostsService {
     const id = uuidv4();
     const at = dto.scheduled_at || new Date().toISOString();
     db.prepare(
-      'INSERT INTO scheduled_post (id, profile_id, media_path, caption, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(id, dto.profile_id, dto.media_path, dto.caption ?? null, at, 'pending');
+      'INSERT INTO scheduled_post (id, profile_id, media_path, title, caption, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, dto.profile_id, dto.media_path, dto.title ?? null, dto.caption ?? null, at, 'pending');
     return this.findOne(id);
   }
 
@@ -84,6 +86,8 @@ export class PostsService {
     }
     if (dto.scheduled_at !== undefined)
       db.prepare("UPDATE scheduled_post SET scheduled_at = ?, updated_at = datetime('now') WHERE id = ?").run(dto.scheduled_at, id);
+    if (dto.title !== undefined)
+      db.prepare("UPDATE scheduled_post SET title = ?, updated_at = datetime('now') WHERE id = ?").run(dto.title, id);
     if (dto.caption !== undefined)
       db.prepare("UPDATE scheduled_post SET caption = ?, updated_at = datetime('now') WHERE id = ?").run(dto.caption, id);
     return this.findOne(id);

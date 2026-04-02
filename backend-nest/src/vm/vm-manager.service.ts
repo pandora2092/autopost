@@ -68,7 +68,67 @@ export class VmManagerService {
     }
   }
 
+  /**
+   * Пути к .qcow2 из XML домена (virsh dumpxml): <source file='...'/> в т.ч. относительные имена клона
+   * (android-template-clone-1.qcow2 и т.п.), не зависят от формата domblklist.
+   */
+  private getDomainDiskPaths(domainName: string): string[] {
+    const imagesDir = path.resolve(process.env.VM_LIBVIRT_IMAGES_DIR || '/var/lib/libvirt/images');
+    try {
+      const xml = this.run(`virsh dumpxml "${domainName}" 2>/dev/null`, { timeout: 30000 });
+      const seen = new Set<string>();
+      const re = /<source\s+file\s*=\s*(['"])([^'"]*)\1/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(xml)) !== null) {
+        const raw = (m[2] || '').trim();
+        if (!raw.endsWith('.qcow2')) continue;
+        const abs = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(imagesDir, raw);
+        if (!abs.startsWith(imagesDir + path.sep)) continue;
+        seen.add(abs);
+      }
+      return [...seen];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /**
+   * Удаление .qcow2: сначала от имени процесса, при EACCES/EPERM — sudo rm (диски libvirt часто root:root).
+   * Для безпарольного sudo: NOPASSWD на rm с путём под VM_LIBVIRT_IMAGES_DIR, либо запуск сервиса от root.
+   */
+  private removeDiskFile(diskPath: string): void {
+    if (!fs.existsSync(diskPath)) return;
+    try {
+      fs.unlinkSync(diskPath);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== 'EACCES' && code !== 'EPERM') {
+        console.warn(`removeVm: не удалось удалить диск ${diskPath}:`, (err as Error)?.message);
+        return;
+      }
+    }
+    if (process.env.VM_DISK_DELETE_NO_SUDO === '1') {
+      console.warn(`removeVm: нет прав на ${diskPath}, задайте права на файлы или sudoers (см. VM_DISK_DELETE_NO_SUDO)`);
+      return;
+    }
+    const r = spawnSync('sudo', ['-n', 'rm', '-f', '--', diskPath], {
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    if (r.status !== 0 || fs.existsSync(diskPath)) {
+      console.warn(
+        `removeVm: sudo rm не удалил ${diskPath} (status=${r.status}, stderr=${r.stderr || ''}). Нужен NOPASSWD sudo для rm или пользователь с правом записи в каталог образов.`,
+      );
+    }
+  }
+
   removeVm(domainName: string): { removed: boolean } {
+    let diskPaths: string[] = [];
+    try {
+      diskPaths = this.getDomainDiskPaths(domainName);
+    } catch (_) {}
+
     try {
       this.run(`virsh destroy "${domainName}" 2>/dev/null || true`);
     } catch (_) {}
@@ -76,6 +136,10 @@ export class VmManagerService {
       this.run(`virsh undefine "${domainName}"`);
     } catch (_) {
       // домен мог быть удалён ранее (напр. через Cockpit)
+    }
+
+    for (const diskPath of diskPaths) {
+      this.removeDiskFile(diskPath);
     }
     return { removed: true };
   }
@@ -211,6 +275,16 @@ export class VmManagerService {
     return { output: out };
   }
 
+  /** Установка YouTube APK на устройство по adb_address (IP:port). Скрипт: install-youtube.sh, env YOUTUBE_APK. */
+  installYoutube(adbAddress: string, apkPath?: string): { output: string } {
+    const script = path.join(this.scriptsDir, 'install-youtube.sh');
+    if (!fs.existsSync(script)) throw new Error(`Скрипт не найден: ${script}`);
+    const args = [script, adbAddress];
+    if (apkPath) args.push(apkPath);
+    const out = this.run(args.map((a) => `"${a}"`).join(' '));
+    return { output: out };
+  }
+
   generateMac(): string {
     const parts = ['52', '54', '00'];
     for (let i = 0; i < 3; i++)
@@ -223,6 +297,21 @@ export class VmManagerService {
    * - pushConfig=true: загружает redsocks.conf на устройство и запускает start-redsocks.sh (один раз, напр. при «Узнать IP»).
    * - pushConfig=false/undefined: только запускает start-redsocks.sh (конфиг уже на устройстве; при старте VM и перед публикацией).
    */
+  /**
+   * Удаляет содержимое папки с медиа на устройстве (по умолчанию /sdcard/Download).
+   * Совпадает с REMOTE_MEDIA_DIR в публикации (env REMOTE_MEDIA_DIR).
+   */
+  clearRemoteMediaDir(adbAddress: string): { remote_dir: string } {
+    const remoteDir = process.env.REMOTE_MEDIA_DIR || '/sdcard/Download';
+    this.adbConnect(adbAddress);
+    if (!this.isAdbReady(adbAddress)) {
+      throw new Error('ADB не отвечает. Запустите VM и проверьте подключение.');
+    }
+    this.run(`adb -s ${adbAddress} shell mkdir -p ${remoteDir}`, { timeout: 15000 });
+    this.run(`adb -s ${adbAddress} shell find ${remoteDir} -mindepth 1 -delete`, { timeout: 120000 });
+    return { remote_dir: remoteDir };
+  }
+
   applyProxy(
     adbAddress: string,
     proxy: { type: string; host: string; port: number; login?: string | null; password?: string | null },

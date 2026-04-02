@@ -35,4 +35,9 @@ export class ProfilesController {
   getStreamUrl(@Param('id') id: string) {
     return this.profilesService.getStreamUrl(id);
   }
+
+  @Post(':id/clear-media')
+  clearMedia(@Param('id') id: string) {
+    return this.profilesService.clearMedia(id);
+  }
 }

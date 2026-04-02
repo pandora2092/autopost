@@ -7,6 +7,19 @@ const ACTION_DELAY_MIN_MS = 2000;
 const ACTION_DELAY_MAX_MS = 10000;
 const VM_RESTART_DELAY_MS = parseInt(process.env.VM_RESTART_DELAY_MS || '8000', 10);
 
+function publishedPostUrlForProfile(
+  instagramUsername: string | null | undefined,
+  socialNetwork: string | null | undefined,
+): string | null {
+  const sn = socialNetwork || 'instagram';
+  const handle = (instagramUsername || '').trim().replace(/^@/, '');
+  if (sn === 'youtube') {
+    if (!handle) return null;
+    return `https://www.youtube.com/@${encodeURIComponent(handle)}`;
+  }
+  return handle ? `https://www.instagram.com/${handle}/` : null;
+}
+
 @Injectable()
 export class PublisherService {
   private queue: { id: string; profile_id: string; media_path: string; caption: string | null; scheduled_at: string }[] = [];
@@ -87,13 +100,13 @@ export class PublisherService {
       await this.postRunner.publish(post);
       const profile = db
         .prepare(
-          `SELECT pr.instagram_username
+          `SELECT pr.instagram_username, pr.social_network
            FROM scheduled_post s
            JOIN profile pr ON pr.id = s.profile_id
            WHERE s.id = ?`,
         )
-        .get(post.id) as { instagram_username: string | null } | undefined;
-      const postUrl = profile?.instagram_username ? `https://www.instagram.com/${profile.instagram_username}/` : null;
+        .get(post.id) as { instagram_username: string | null; social_network: string | null } | undefined;
+      const postUrl = publishedPostUrlForProfile(profile?.instagram_username, profile?.social_network);
       db.prepare(
         "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
       ).run('published', postUrl, post.id);
@@ -109,13 +122,13 @@ export class PublisherService {
             await this.postRunner.publish(post);
             const profile = db
               .prepare(
-                `SELECT pr.instagram_username
+                `SELECT pr.instagram_username, pr.social_network
                  FROM scheduled_post s
                  JOIN profile pr ON pr.id = s.profile_id
                  WHERE s.id = ?`,
               )
-              .get(post.id) as { instagram_username: string | null } | undefined;
-            const postUrl = profile?.instagram_username ? `https://www.instagram.com/${profile.instagram_username}/` : null;
+              .get(post.id) as { instagram_username: string | null; social_network: string | null } | undefined;
+            const postUrl = publishedPostUrlForProfile(profile?.instagram_username, profile?.social_network);
             db.prepare(
               "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
             ).run('published', postUrl, post.id);

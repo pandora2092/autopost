@@ -10,8 +10,15 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     [profiles, page]
   );
   const [vmId, setVmId] = useState('');
+  const [socialNetwork, setSocialNetwork] = useState('instagram');
   const [instagramUsername, setInstagramUsername] = useState('');
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, profileId: null, profileLabel: '' });
+  const [clearMediaConfirmPopup, setClearMediaConfirmPopup] = useState({
+    visible: false,
+    profileId: null,
+    profileLabel: '',
+  });
+  const [clearMediaLoading, setClearMediaLoading] = useState(false);
   const [streamWarnPopup, setStreamWarnPopup] = useState({ visible: false, vmName: '' });
 
   const handleSave = async () => {
@@ -20,10 +27,15 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
       return;
     }
     try {
-      await profilesApi.create({ vm_id: vmId, instagram_username: instagramUsername || undefined });
+      await profilesApi.create({
+        vm_id: vmId,
+        social_network: socialNetwork,
+        instagram_username: instagramUsername || undefined,
+      });
       showToast('Профиль создан', 'success');
       setShowForm(false);
       setVmId('');
+      setSocialNetwork('instagram');
       setInstagramUsername('');
       onSave();
     } catch (e) {
@@ -56,7 +68,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     setDeleteConfirmPopup({
       visible: true,
       profileId: p.id,
-      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}`,
+      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${p.social_network === 'youtube' ? ' · YouTube' : ''}`,
     });
   };
 
@@ -77,14 +89,48 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     setDeleteConfirmPopup({ visible: false, profileId: null, profileLabel: '' });
   };
 
+  const handleClearMediaClick = (p) => {
+    if (p.vm_status && p.vm_status !== 'running') {
+      setStreamWarnPopup({ visible: true, vmName: p.vm_name || '' });
+      return;
+    }
+    setClearMediaConfirmPopup({
+      visible: true,
+      profileId: p.id,
+      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${p.social_network === 'youtube' ? ' · YouTube' : ''}`,
+    });
+  };
+
+  const handleClearMediaCancel = () => {
+    setClearMediaConfirmPopup({ visible: false, profileId: null, profileLabel: '' });
+  };
+
+  const handleClearMediaConfirm = async () => {
+    const { profileId } = clearMediaConfirmPopup;
+    setClearMediaConfirmPopup({ visible: false, profileId: null, profileLabel: '' });
+    if (!profileId) return;
+    setClearMediaLoading(true);
+    try {
+      const r = await profilesApi.clearMedia(profileId);
+      showToast(r.remote_dir ? `Медиа очищено (${r.remote_dir})` : 'Медиа очищено', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      setClearMediaLoading(false);
+    }
+  };
+
   return (
     <section className="card">
-      <h2>Профили (VM + Instagram)</h2>
+      <h2>Профили (VM + соцсеть)</h2>
       <div className="card-actions">
         <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Добавить профиль</button>
       </div>
       {showForm && (
         <div className="post-form card-inner">
+          <p style={{ marginBottom: '0.75rem', color: 'var(--muted, #565f89)', fontSize: '0.9rem' }}>
+            Для одной VM можно добавить отдельные профили Instagram и YouTube. Нельзя создать два профиля одной и той же соцсети на ту же VM.
+          </p>
           <div className="post-form-row">
             <label className="post-form-label">VM</label>
             <select
@@ -99,11 +145,24 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
             </select>
           </div>
           <div className="post-form-row">
-            <label className="post-form-label">Логин Instagram</label>
+            <label className="post-form-label">Соцсеть</label>
+            <select
+              value={socialNetwork}
+              onChange={(e) => setSocialNetwork(e.target.value)}
+              className="post-form-input-wide"
+            >
+              <option value="instagram">Instagram (Reels)</option>
+              <option value="youtube">YouTube (Shorts)</option>
+            </select>
+          </div>
+          <div className="post-form-row">
+            <label className="post-form-label">
+              {socialNetwork === 'youtube' ? 'Канал / @handle (опц.)' : 'Логин Instagram (опц.)'}
+            </label>
             <input
               type="text"
               className="post-form-input-wide"
-              placeholder="Логин Instagram (опц.)"
+              placeholder={socialNetwork === 'youtube' ? 'Например mychannel' : 'Логин Instagram (опц.)'}
               value={instagramUsername}
               onChange={(e) => setInstagramUsername(e.target.value)}
             />
@@ -118,11 +177,22 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
         {pageItems.map((p) => (
           <div key={p.id} className="list-item">
             <span><strong>{p.vm_name}</strong></span>
-            <span>{p.instagram_username || '—'}</span>
+            <span>
+              {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+              {p.instagram_username ? ` · @${p.instagram_username}` : ''}
+            </span>
             <span className={`status ${p.instagram_authorized ? 'authorized' : 'not-authorized'}`}>
               {p.instagram_authorized ? 'авторизован' : 'не авторизован'}
             </span>
             <button type="button" className="btn small" onClick={() => handleOpenStream(p.id)}>Открыть экран</button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={clearMediaLoading}
+              onClick={() => handleClearMediaClick(p)}
+            >
+              Очистить медиа
+            </button>
             <button type="button" className="btn small danger" onClick={() => handleDeleteClick(p)}>Удалить</button>
           </div>
         ))}
@@ -133,6 +203,27 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
         total={total}
         onPageChange={setPage}
       />
+
+      {clearMediaConfirmPopup.visible && (
+        <div className="modal-overlay" onClick={handleClearMediaCancel}>
+          <div className="modal delete-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-confirm-icon">⚠</div>
+            <h3>Очистить медиа на устройстве?</h3>
+            <p className="modal-vm-name">{clearMediaConfirmPopup.profileLabel}</p>
+            <p className="delete-confirm-warning">
+              Будут удалены файлы в папке загрузок на Android (по умолчанию /sdcard/Download), откуда берутся ролики для публикации.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={handleClearMediaCancel} disabled={clearMediaLoading}>
+                Отмена
+              </button>
+              <button type="button" className="btn danger" onClick={handleClearMediaConfirm} disabled={clearMediaLoading}>
+                {clearMediaLoading ? 'Очистка…' : 'Очистить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteConfirmPopup.visible && (
         <div className="modal-overlay" onClick={handleDeleteCancel}>
@@ -158,7 +249,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
             <h3>VM должна быть запущена</h3>
             <p className="modal-vm-name">{streamWarnPopup.vmName || '—'}</p>
             <p className="delete-confirm-warning">
-              Запустите VM в разделе «Виртуальные машины», затем снова нажмите «Открыть экран».
+              Запустите VM в разделе «Виртуальные машины», затем повторите действие.
             </p>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={handleStreamWarnClose}>Понятно</button>

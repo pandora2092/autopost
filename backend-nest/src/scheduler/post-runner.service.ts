@@ -15,7 +15,7 @@ export class PostRunnerService {
     const db = this.db.getDb();
     const row = db
       .prepare(
-        `SELECT s.id, s.profile_id, s.media_path, s.caption, pr.vm_id, v.adb_address, v.libvirt_domain, v.status AS vm_status,
+        `SELECT s.id, s.profile_id, s.media_path, s.title, s.caption, pr.vm_id, pr.social_network, v.adb_address, v.libvirt_domain, v.status AS vm_status,
                 v.proxy_id, p.type AS proxy_type, p.host AS proxy_host, p.port AS proxy_port, p.login AS proxy_login, p.password AS proxy_password
          FROM scheduled_post s
          JOIN profile pr ON pr.id = s.profile_id
@@ -28,6 +28,7 @@ export class PostRunnerService {
         libvirt_domain: string;
         vm_status: string;
         media_path: string;
+        title: string | null;
         caption: string | null;
         proxy_id: string | null;
         proxy_type: string | null;
@@ -35,6 +36,7 @@ export class PostRunnerService {
         proxy_port: number | null;
         proxy_login: string | null;
         proxy_password: string | null;
+        social_network: string | null;
       } | undefined;
     if (!row) throw new Error('Post or VM not found');
     let adbAddress = row.adb_address;
@@ -78,9 +80,11 @@ export class PostRunnerService {
         'Для публикации необходим Appium. Задайте USE_APPIUM=1 и запустите Appium server (подключённый к устройству по ADB).',
       );
     }
+    const socialNetwork = row.social_network === 'youtube' ? 'youtube' : 'instagram';
     await this.appiumPublish.publishWithAppium(
-      { id: post.id, media_path: row.media_path, caption: row.caption },
+      { id: post.id, media_path: row.media_path, title: row.title, caption: row.caption },
       adbAddress,
+      socialNetwork,
     );
     return { ok: true };
   }

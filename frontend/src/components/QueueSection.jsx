@@ -35,7 +35,10 @@ export default function QueueSection({ queue, stats }) {
         {queue.pending?.length
           ? queue.pending.map((p) => (
               <div key={p.id} className="list-item">
-                <span>{p.instagram_username || p.profile_id}</span>
+                <span>
+                  {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                  {p.instagram_username ? ` · ${p.instagram_username}` : ` · ${p.profile_id}`}
+                </span>
                 <span>{new Date(p.scheduled_at).toLocaleString()}</span>
                 <span className={`status ${p.status}`}>{getPostStatusLabel(p.status)}</span>
               </div>
@@ -48,7 +51,10 @@ export default function QueueSection({ queue, stats }) {
           <div className="list">
             {queue.recent.map((p) => (
               <div key={p.id} className="list-item">
-                <span>{p.instagram_username}</span>
+                <span>
+                  {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                  {p.instagram_username ? ` · ${p.instagram_username}` : ''}
+                </span>
                 <span>{p.published_at ? new Date(p.published_at).toLocaleString() : ''}</span>
               </div>
             ))}

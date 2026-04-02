@@ -16,6 +16,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [configureConfigPopup, setConfigureConfigPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [installInstagramPopup, setInstallInstagramPopup] = useState({ visible: false, vmId: null, vmName: '' });
+  const [installYoutubePopup, setInstallYoutubePopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [proxyChangePopup, setProxyChangePopup] = useState({
     visible: false,
     vmId: null,
@@ -27,6 +28,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [startingVmId, setStartingVmId] = useState(null);
   const [firstStartConfirmPopup, setFirstStartConfirmPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [installingInstagramId, setInstallingInstagramId] = useState(null);
+  const [installingYoutubeId, setInstallingYoutubeId] = useState(null);
 
   const handleSave = async () => {
     if (!name?.trim()) {
@@ -178,6 +180,38 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
 
   const handleInstallInstagramCancel = () => {
     setInstallInstagramPopup({ visible: false, vmId: null, vmName: '' });
+  };
+
+  const doInstallYoutube = async (id) => {
+    setInstallingYoutubeId(id);
+    try {
+      await vmApi.installYoutube(id);
+      showToast('YouTube установлен для VM', 'success');
+      onSave();
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      setInstallingYoutubeId(null);
+    }
+  };
+
+  const handleInstallYoutubeClick = (v) => {
+    if (v.status === 'running') {
+      doInstallYoutube(v.id);
+    } else {
+      setInstallYoutubePopup({ visible: true, vmId: v.id, vmName: v.name || 'VM' });
+    }
+  };
+
+  const handleInstallYoutubeConfirm = async () => {
+    const { vmId } = installYoutubePopup;
+    setInstallYoutubePopup({ visible: false, vmId: null, vmName: '' });
+    if (!vmId) return;
+    await doInstallYoutube(vmId);
+  };
+
+  const handleInstallYoutubeCancel = () => {
+    setInstallYoutubePopup({ visible: false, vmId: null, vmName: '' });
   };
 
   const handleDeleteClick = (id) => {
@@ -377,6 +411,23 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
                     'Установить Instagram'
                   )}
                 </button>
+                <button
+                  type="button"
+                  className="btn small"
+                  onClick={() => handleInstallYoutubeClick(v)}
+                  disabled={!!v.youtube_installed || !!installingYoutubeId}
+                >
+                  {installingYoutubeId === v.id ? (
+                    <>
+                      <span className="loader-spinner" aria-hidden="true" />
+                      Установка…
+                    </>
+                  ) : v.youtube_installed ? (
+                    'YouTube установлен'
+                  ) : (
+                    'Установить YouTube'
+                  )}
+                </button>
                 <button type="button" className="btn small danger" onClick={() => handleDeleteClick(v.id)}>Удалить</button>
               </div>
             </div>
@@ -453,6 +504,23 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
             <div className="modal-actions">
               <button type="button" className="btn" onClick={handleInstallInstagramCancel}>Отмена</button>
               <button type="button" className="btn primary" onClick={handleInstallInstagramConfirm}>Установить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {installYoutubePopup.visible && (
+        <div className="modal-overlay" onClick={handleInstallYoutubeCancel}>
+          <div className="modal delete-confirm-modal install-instagram-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="install-instagram-icon">ℹ</div>
+            <h3>Установить YouTube</h3>
+            <p className="modal-vm-name">{installYoutubePopup.vmName}</p>
+            <p className="delete-confirm-warning">
+              Для установки YouTube VM должна быть запущена. Укажите APK через YOUTUBE_APK на сервере. Запустите VM и нажмите «Установить».
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={handleInstallYoutubeCancel}>Отмена</button>
+              <button type="button" className="btn primary" onClick={handleInstallYoutubeConfirm}>Установить</button>
             </div>
           </div>
         </div>

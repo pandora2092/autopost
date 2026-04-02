@@ -38,7 +38,9 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     if (data && typeof data === 'object') {
-      const msg = data.error || data.message || JSON.stringify(data);
+      const nestMessage = Array.isArray(data.message) ? data.message.join(', ') : data.message;
+      // NestJS кладёт человекочитаемый текст в message, а error — короткий код (например "Conflict").
+      const msg = nestMessage || data.error || JSON.stringify(data);
       throw new Error(msg);
     }
     throw new Error(data || res.statusText);
@@ -66,6 +68,7 @@ export const vmApi = {
   setAndroidId: (id) => request(`/vm/${id}/set-android-id`, { method: 'POST', body: JSON.stringify({}) }),
   getIp: (id, save = true) => request(`/vm/${id}/ip?save=${save ? '1' : '0'}`),
   installInstagram: (id) => request(`/vm/${id}/install-instagram`, { method: 'POST', body: JSON.stringify({}) }),
+  installYoutube: (id) => request(`/vm/${id}/install-youtube`, { method: 'POST', body: JSON.stringify({}) }),
   applyProxy: (id, pushConfig = false) =>
     request(`/vm/${id}/apply-proxy`, { method: 'POST', body: JSON.stringify({ pushConfig }) }),
 };
@@ -77,6 +80,7 @@ export const profilesApi = {
   update: (id, body) => request(`/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: (id) => request(`/profiles/${id}`, { method: 'DELETE' }),
   getStreamUrl: (id) => request(`/profiles/${id}/stream-url`),
+  clearMedia: (id) => request(`/profiles/${id}/clear-media`, { method: 'POST', body: JSON.stringify({}) }),
 };
 
 export const uploadApi = {
