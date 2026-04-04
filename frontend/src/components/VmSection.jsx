@@ -432,9 +432,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
                   type="button"
                   className="btn small"
                   onClick={() => handleInstallInstagramClick(v)}
-                  // временно: не отключаем кнопку после установки Instagram
-                  // disabled={!!v.instagram_installed || !!installingInstagramId}
-                  disabled={!!installingInstagramId}
+                  disabled={!!v.instagram_installed || !!installingInstagramId}
                 >
                   {installingInstagramId === v.id ? (
                     <>
@@ -468,9 +466,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
                   type="button"
                   className="btn small"
                   onClick={() => handleInstallVkClick(v)}
-                  // временно: не отключаем кнопку после установки VK
-                  // disabled={!!v.vk_installed || !!installingVkId}
-                  disabled={!!installingVkId}
+                  disabled={!!v.vk_installed || !!installingVkId}
                 >
                   {installingVkId === v.id ? (
                     <>
