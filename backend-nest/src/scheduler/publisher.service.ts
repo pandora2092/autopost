@@ -17,6 +17,10 @@ function publishedPostUrlForProfile(
     if (!handle) return null;
     return `https://www.youtube.com/@${encodeURIComponent(handle)}`;
   }
+  if (sn === 'vk') {
+    if (!handle) return null;
+    return `https://vk.com/${encodeURIComponent(handle)}`;
+  }
   return handle ? `https://www.instagram.com/${handle}/` : null;
 }
 
@@ -94,7 +98,12 @@ export class PublisherService {
 
   private async processOne(post: { id: string; profile_id: string }) {
     const db = this.db.getDb();
-    db.prepare("UPDATE scheduled_post SET status = ?, updated_at = datetime('now') WHERE id = ?").run('publishing', post.id);
+    const start = db
+      .prepare(
+        "UPDATE scheduled_post SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = 'assigned'",
+      )
+      .run('publishing', post.id);
+    if (start.changes === 0) return;
     await this.randomDelay();
     try {
       await this.postRunner.publish(post);
@@ -107,13 +116,22 @@ export class PublisherService {
         )
         .get(post.id) as { instagram_username: string | null; social_network: string | null } | undefined;
       const postUrl = publishedPostUrlForProfile(profile?.instagram_username, profile?.social_network);
-      db.prepare(
-        "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
-      ).run('published', postUrl, post.id);
-      db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
+      const ok = db
+        .prepare(
+          "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ? AND status = 'publishing'",
+        )
+        .run('published', postUrl, post.id);
+      if (ok.changes > 0) {
+        db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
+      }
       await this.stopVmAfterPublish(post.id);
     } catch (err) {
       const msg = (err as Error)?.message || String(err);
+      if (msg.includes('Публикация отменена')) {
+        await this.stopVmAfterPublish(post.id);
+        await this.randomDelay();
+        return;
+      }
       if (this.isVmHungError(msg)) {
         const vm = await this.getVmForPost(post.id);
         if (vm && (await this.restartVmAndUpdateAdb(vm.vm_id, vm.libvirt_domain))) {
@@ -129,10 +147,14 @@ export class PublisherService {
               )
               .get(post.id) as { instagram_username: string | null; social_network: string | null } | undefined;
             const postUrl = publishedPostUrlForProfile(profile?.instagram_username, profile?.social_network);
-            db.prepare(
-              "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ?",
-            ).run('published', postUrl, post.id);
-            db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
+            const okRetry = db
+              .prepare(
+                "UPDATE scheduled_post SET status = ?, published_at = datetime('now'), post_url = ?, updated_at = datetime('now'), error_message = NULL WHERE id = ? AND status = 'publishing'",
+              )
+              .run('published', postUrl, post.id);
+            if (okRetry.changes > 0) {
+              db.prepare('UPDATE profile SET instagram_authorized = 1 WHERE id = ?').run(post.profile_id);
+            }
             await this.stopVmAfterPublish(post.id);
             await this.randomDelay();
             return;
@@ -143,7 +165,7 @@ export class PublisherService {
       }
       console.error('Publisher: post failed', post.id, msg);
       db.prepare(
-        "UPDATE scheduled_post SET status = ?, error_message = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE scheduled_post SET status = ?, error_message = ?, updated_at = datetime('now') WHERE id = ? AND status = 'publishing'",
       ).run('failed', msg, post.id);
       await this.stopVmAfterPublish(post.id);
     }

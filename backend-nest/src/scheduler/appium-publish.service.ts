@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { VmManagerService } from '../vm/vm-manager.service';
+import { PublishCancellationRegistry } from './publish-cancellation.registry';
 
 const ACTION_DELAY_MS = 10000;
 /** Пауза после adb push, чтобы медиа-сканер успел проиндексировать файл (избежать "cannot access media"). */
@@ -28,15 +29,44 @@ const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '0',
 
 const YOUTUBE_APP_ID = 'com.google.android.youtube';
 const YOUTUBE_HOME_ACTIVITY = 'com.google.android.youtube.app.honeycomb.Shell$HomeActivity';
+const VK_APP_ID = 'com.vkontakte.android';
+/** После Publish: успех — попап с title «Clip published on profile» (исчезает быстро — нужен частый опрос). */
+const VK_CLIP_UPLOAD_TIMEOUT_MS = parseInt(process.env.VK_CLIP_UPLOAD_TIMEOUT_MS || '1200000', 10);
+/** Опрос успеха VK (мс). Короткий попап — по умолчанию 25. VK_CLIP_SUCCESS_POLL_MS или VK_CLIP_UPLOAD_POLL_MS. */
+const VK_CLIP_SUCCESS_POLL_MS = parseInt(
+  process.env.VK_CLIP_SUCCESS_POLL_MS || process.env.VK_CLIP_UPLOAD_POLL_MS || '25',
+  10,
+);
 /** Ожидание фоновой загрузки на YouTube после публикации (по UI «Uploading» / «Загрузка»). */
 const YOUTUBE_POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.YOUTUBE_POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
+/** Снекбар «Uploaded…» быстро исчезает — короткий интервал опроса (мс). Env: YOUTUBE_UPLOAD_SUCCESS_POLL_MS. */
+const YOUTUBE_UPLOAD_SUCCESS_POLL_MS = parseInt(process.env.YOUTUBE_UPLOAD_SUCCESS_POLL_MS || '100', 10);
+/** После выбора клипа / входа в редактор Reels Instagram может показать диалог с кнопкой «Not now» (auxiliary_button). Опрос (мс). 0 — не ждать (только одна проверка на вызов). Env: INSTAGRAM_REELS_NOT_NOW_TIMEOUT_MS. */
+const INSTAGRAM_REELS_NOT_NOW_TIMEOUT_MS = parseInt(
+  process.env.INSTAGRAM_REELS_NOT_NOW_TIMEOUT_MS || '4000',
+  10,
+);
+/** Промо Edits / «Get App» в редакторе Reels: опрос перед тапом по превью над шитом. Env: INSTAGRAM_REELS_GET_APP_TIMEOUT_MS. */
+const INSTAGRAM_REELS_GET_APP_TIMEOUT_MS = parseInt(
+  process.env.INSTAGRAM_REELS_GET_APP_TIMEOUT_MS || '4000',
+  10,
+);
+/** Шит «Update on your original audio»: кнопка clips_original_audio_nux_sheet_share_button после Next на экране подписи. Env: INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS. */
+const INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS = parseInt(
+  process.env.INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS || '5000',
+  10,
+);
 
 /**
  * Публикация Reel: Profile → Create New → Create new reel → выбор видео в галерее → Next (edit) →
- * подпись → Next (share_button) → About Reels: Share → Continue (privacy). Селекторы под версию Instagram.
+ * при необходимости «Not now» на auxiliary_button / промо Edits («Get App» — тап выше шита) → подпись → Share или Next → при необходимости Share на шите original audio → About Reels: Share → Continue (privacy). Селекторы под версию Instagram.
  *
  * YouTube Shorts: Create → «Upload a video» → папка Download → видео → Next → подпись/описание → Publish.
  * Селекторы могут отличаться по версии приложения — при сбое обновите runYoutubeShortFlow.
+ *
+   * VK Clip: Create → Clip → видео в пикере по имени файла (picker_photo + content-desc) → Next ×2 →
+   * описание (clip_description_edit) → Edit → Publish → ожидание title «Clip published on profile».
+   * См. runVkClipFlow.
  */
 
 function delay(ms: number): Promise<void> {
@@ -45,7 +75,171 @@ function delay(ms: number): Promise<void> {
 
 @Injectable()
 export class AppiumPublishService {
-  constructor(private readonly vmManager: VmManagerService) {}
+  constructor(
+    private readonly vmManager: VmManagerService,
+    private readonly publishCancelRegistry: PublishCancellationRegistry,
+  ) {}
+
+  private async delayCancellable(postId: string, ms: number): Promise<void> {
+    const chunk = 400;
+    for (let left = ms; left > 0; left -= chunk) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      await delay(Math.min(chunk, left));
+    }
+  }
+
+  /**
+   * Диалог после выбора видео / при входе в редактор Reels: кнопка «Not now» (com.instagram.android:id/auxiliary_button).
+   * @param maxWaitMs максимум опроса; ≤0 — одна попытка без ожидания между проверками.
+   */
+  private async dismissInstagramReelsNotNowIfPresent(
+    driver: WebdriverIO.Browser,
+    postId: string,
+    maxWaitMs?: number,
+  ): Promise<void> {
+    const limit = maxWaitMs ?? INSTAGRAM_REELS_NOT_NOW_TIMEOUT_MS;
+    const selectors = [
+      '//*[@resource-id="com.instagram.android:id/auxiliary_button" and (@text="Not now" or @text="Не сейчас")]',
+      'android=new UiSelector().resourceId("com.instagram.android:id/auxiliary_button").text("Not now")',
+      'android=new UiSelector().resourceId("com.instagram.android:id/auxiliary_button").text("Не сейчас")',
+      '~Not now',
+    ];
+    const pollMs = 350;
+    const tryClick = async (): Promise<boolean> => {
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            await delay(2000);
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+    const deadline = Date.now() + (limit > 0 ? limit : 0);
+    do {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      if (await tryClick()) return;
+      if (limit <= 0) break;
+      await this.delayCancellable(postId, pollMs);
+    } while (Date.now() < deadline);
+  }
+
+  /**
+   * Bottom sheet «Edits» / «Get App» (igds_button / ig_text): закрытие тапом по области превью выше шита, не по кнопке.
+   * INSTAGRAM_EDITS_SHEET_DISMISS_Y_RATIO — доля высоты экрана для запасного Y (0–1), по умолчанию 0.25.
+   */
+  private async dismissInstagramReelsEditsGetAppSheetIfPresent(
+    driver: WebdriverIO.Browser,
+    postId: string,
+    maxWaitMs?: number,
+  ): Promise<void> {
+    const limit = maxWaitMs ?? INSTAGRAM_REELS_GET_APP_TIMEOUT_MS;
+    const getAppSelectors = [
+      '//*[@resource-id="com.instagram.android:id/ig_text" and (@text="Get App" or @text="Получить приложение")]',
+      '//*[@resource-id="com.instagram.android:id/igds_button"]//*[@text="Get App"]',
+      'android=new UiSelector().resourceId("com.instagram.android:id/ig_text").text("Get App")',
+      '~Get App',
+    ];
+    const sheetHeadlineSelectors = [
+      '//*[contains(@text,"Level up your videos")]',
+      '//*[contains(@text,"video creation app from Instagram")]',
+    ];
+    const pollMs = 350;
+    const fallbackYRatio = parseFloat(process.env.INSTAGRAM_EDITS_SHEET_DISMISS_Y_RATIO || '0.25');
+
+    const findAnchor = async (): Promise<{
+      getLocation(): Promise<{ x: number; y: number }>;
+    } | null> => {
+      for (const sel of getAppSelectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) return el;
+        } catch {
+          continue;
+        }
+      }
+      for (const sel of sheetHeadlineSelectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) return el;
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    };
+
+    const tapAboveSheet = async (): Promise<boolean> => {
+      const anchor = await findAnchor();
+      if (!anchor) return false;
+      try {
+        const rect = await driver.getWindowRect();
+        const loc = await anchor.getLocation();
+        const tapX = Math.round(rect.width / 2);
+        const btnTopY = loc.y;
+        const lift = Math.round(rect.height * 0.42);
+        let tapY = Math.min(Math.round(rect.height * fallbackYRatio), btnTopY - lift);
+        tapY = Math.max(Math.round(rect.height * 0.08), tapY);
+        await driver.execute('mobile: clickGesture', { x: tapX, y: tapY });
+        await delay(2000);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const deadline = Date.now() + (limit > 0 ? limit : 0);
+    do {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      if (await tapAboveSheet()) return;
+      if (limit <= 0) break;
+      await this.delayCancellable(postId, pollMs);
+    } while (Date.now() < deadline);
+  }
+
+  /**
+   * После подписи: если нажали Next, может открыться шит «Update on your original audio» — финальный Share
+   * (clips_original_audio_nux_sheet_share_button), не путать с About Reels (clips_nux_sheet_share_button).
+   */
+  private async clickInstagramReelsOriginalAudioSheetShareIfPresent(
+    driver: WebdriverIO.Browser,
+    postId: string,
+    maxWaitMs?: number,
+  ): Promise<void> {
+    const limit = maxWaitMs ?? INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS;
+    const selectors = [
+      '//*[@resource-id="com.instagram.android:id/clips_original_audio_nux_sheet_share_button"]',
+      'android=new UiSelector().resourceId("com.instagram.android:id/clips_original_audio_nux_sheet_share_button")',
+    ];
+    const pollMs = 350;
+    const tryClick = async (): Promise<boolean> => {
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            await delay(ACTION_DELAY_MS);
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+    const deadline = Date.now() + (limit > 0 ? limit : 0);
+    do {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      if (await tryClick()) return;
+      if (limit <= 0) break;
+      await this.delayCancellable(postId, pollMs);
+    } while (Date.now() < deadline);
+  }
 
   /** Экран загрузки Reels: com.instagram.android:id/status_text — «Sharing to Reels…». */
   private async isSharingToReelsUiVisible(driver: WebdriverIO.Browser): Promise<boolean> {
@@ -63,7 +257,7 @@ export class AppiumPublishService {
   /**
    * После Share/Continue: ждём появления «Sharing to Reels…», затем — пока блок загрузки не исчезнет.
    */
-  private async waitForSharingToReelsToFinish(driver: WebdriverIO.Browser): Promise<void> {
+  private async waitForSharingToReelsToFinish(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
 
     const startedAt = Date.now();
@@ -71,6 +265,7 @@ export class AppiumPublishService {
     let firstSeenAt: number | null = null;
 
     while (true) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
       const now = Date.now();
       const visible = await this.isSharingToReelsUiVisible(driver);
 
@@ -98,16 +293,80 @@ export class AppiumPublishService {
   }
 
   /** После Share/Continue: ожидание завершения фоновой публикации Reels по UI «Sharing to Reels…». */
-  private async waitForPublishCompletion(driver: WebdriverIO.Browser): Promise<void> {
-    await this.waitForSharingToReelsToFinish(driver);
+  private async waitForPublishCompletion(driver: WebdriverIO.Browser, postId: string): Promise<void> {
+    await this.waitForSharingToReelsToFinish(driver, postId);
   }
 
-  private async waitForYoutubeUploadFinish(driver: WebdriverIO.Browser): Promise<void> {
+  /**
+   * VK: после Publish — ловим короткий попап: title «Clip published on profile».
+   * Серия быстрых опросов по id/title (легче, чем getPageSource), затем снимок разметки.
+   */
+  private async waitForVkClipPublishedSuccess(driver: WebdriverIO.Browser, postId: string): Promise<void> {
+    if (!(VK_CLIP_UPLOAD_TIMEOUT_MS > 0)) return;
+    const startedAt = Date.now();
+    const pageMarkers = ['Clip published on profile', 'Клип опубликован'];
+    const titleXp = '//*[@resource-id="com.vkontakte.android:id/title"]';
+    const poll = Math.max(10, VK_CLIP_SUCCESS_POLL_MS);
+    const quickPasses = 12;
+    const quickDelayMs = 8;
+
+    const textIsSuccess = (text: string | undefined): boolean =>
+      !!text && pageMarkers.some((m) => text.includes(m));
+
+    const tryTitleElements = async (): Promise<boolean> => {
+      try {
+        const els = await driver.$$(titleXp);
+        const n = await els.length;
+        for (let i = 0; i < n; i++) {
+          const el = els[i];
+          try {
+            const t = (await el.getText()) || '';
+            if (textIsSuccess(t)) return true;
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    };
+
+    while (Date.now() - startedAt < VK_CLIP_UPLOAD_TIMEOUT_MS) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      for (let q = 0; q < quickPasses; q++) {
+        if (await tryTitleElements()) {
+          await delay(400);
+          return;
+        }
+        await delay(quickDelayMs);
+      }
+
+      try {
+        const src = await driver.getPageSource();
+        if (src && pageMarkers.some((m) => src.includes(m))) {
+          await delay(400);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
+      await delay(poll);
+    }
+    throw new Error(
+      `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не появилось сообщение «Clip published on profile» (попап id/title или разметка).`,
+    );
+  }
+
+  private async waitForYoutubeUploadFinish(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(YOUTUBE_POST_PUBLISH_TIMEOUT_MS > 0)) return;
+    const poll = Math.max(25, YOUTUBE_UPLOAD_SUCCESS_POLL_MS);
     const startedAt = Date.now();
     let seenUploading = false;
     let seenUploaded = false;
     while (Date.now() - startedAt < YOUTUBE_POST_PUBLISH_TIMEOUT_MS) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
       let uploadingVisible = false;
       const hints = [
         '//android.widget.TextView[contains(@text,"Uploading")]',
@@ -154,9 +413,10 @@ export class AppiumPublishService {
 
       if (seenUploading && !uploadingVisible) {
         if (POST_PUBLISH_DELAY_MS > 0) await delay(POST_PUBLISH_DELAY_MS);
-        await delay(5000);
-        // Иногда snackbar появляется чуть позже исчезновения "Uploading"
-        for (let i = 0; i < 10; i++) {
+        // Снекбар может мелькнуть сразу после исчезновения «Uploading» — без длинной слепой паузы.
+        await delay(poll);
+        const snackbarIters = Math.max(40, Math.ceil(10000 / poll));
+        for (let i = 0; i < snackbarIters; i++) {
           for (const xp of uploadedHints) {
             try {
               const el = await driver.$(xp);
@@ -168,11 +428,11 @@ export class AppiumPublishService {
               // ignore
             }
           }
-          await delay(500);
+          await delay(poll);
         }
         return;
       }
-      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
+      await delay(poll);
     }
   }
 
@@ -202,7 +462,7 @@ export class AppiumPublishService {
     return [...new Set(candidates)];
   }
 
-  private async launchYoutubeApp(driver: WebdriverIO.Browser, adbAddress: string): Promise<void> {
+  private async launchYoutubeApp(driver: WebdriverIO.Browser, adbAddress: string, postId: string): Promise<void> {
     const isYoutubeForeground = async (): Promise<boolean> => {
       try {
         const pkg = await (driver as unknown as { getCurrentPackage(): Promise<string> }).getCurrentPackage();
@@ -214,6 +474,7 @@ export class AppiumPublishService {
     const waitYoutubeForeground = async (timeoutMs: number): Promise<boolean> => {
       const started = Date.now();
       while (Date.now() - started < timeoutMs) {
+        this.publishCancelRegistry.throwIfCancelled(postId);
         if (await isYoutubeForeground()) return true;
         await delay(300);
       }
@@ -564,6 +825,9 @@ export class AppiumPublishService {
       }
       await delay(ACTION_DELAY_MS);
 
+      // Опциональный диалог «Not now» до первого Next (если перекрывает ленту/трей).
+      await this.dismissInstagramReelsNotNowIfPresent(driver, post.id, 0);
+
       // 5. «Next» после выбора медиа: сначала кнопка в галерее (media_thumbnail_tray_button), затем на экране редактирования (clips_right_action_button). Не тапаем «Select» — он может совпасть с кругом выбора и снять выделение.
       const editNextSelectors = [
         '//*[@resource-id="com.instagram.android:id/media_thumbnail_tray_button"]',
@@ -586,6 +850,13 @@ export class AppiumPublishService {
           continue;
         }
       }
+
+      // После перехода к редактору клипа может появиться тот же «Not now» — закрыть и дальше второй Next.
+      await this.dismissInstagramReelsNotNowIfPresent(driver, post.id);
+
+      // Промо Edits («Get App»): тап по превью выше шита, затем как обычно второй Next.
+      await this.dismissInstagramReelsEditsGetAppSheetIfPresent(driver, post.id);
+
       // Второй «Next» — на экране редактирования рила (переход к подписи).
       const editScreenNextSelectors = [
         '//*[@resource-id="com.instagram.android:id/clips_right_action_button"]',
@@ -635,16 +906,18 @@ export class AppiumPublishService {
 
       await delay(ACTION_DELAY_MS);
 
-      // 7. Кнопка «Next» на экране подписи (share_button) — переход к публикации.
+      // 7. Экран подписи: чаще всего сразу Share (share_button); иначе Next → шит original audio с отдельным Share.
       const shareButtonSelectors = [
+        '//*[@resource-id="com.instagram.android:id/share_button" and (contains(@content-desc,"Share") or contains(@content-desc,"Поделиться"))]',
         '//*[@resource-id="com.instagram.android:id/share_button"]',
         '~Next',
-        '~Поделиться',
-        '~Share',
         '//*[@content-desc="Next"]',
         '//*[contains(@content-desc, "Next")]',
+        '~Поделиться',
+        '~Share',
         'android=new UiSelector().resourceId("com.instagram.android:id/share_button")',
         'android=new UiSelector().description("Next")',
+        'android=new UiSelector().description("Share")',
       ];
       let shareClicked = false;
       for (const sel of shareButtonSelectors) {
@@ -661,13 +934,18 @@ export class AppiumPublishService {
       }
       if (!shareClicked) {
         throw new Error(
-          'Кнопка «Next»/«Поделиться» не найдена. Обновите shareButtonSelectors в appium-publish.service.',
+          'Кнопка «Share»/«Next»/«Поделиться» на экране подписи не найдена. Обновите shareButtonSelectors в appium-publish.service.',
         );
       }
       await delay(ACTION_DELAY_MS);
 
-      // 8. Модалка «About Reels»: кнопка Share (clips_nux_sheet_share_button).
+      // 7b. Шит «Update on your original audio» (после Next на подписи): Share на clips_original_audio_nux_sheet_share_button.
+      await this.clickInstagramReelsOriginalAudioSheetShareIfPresent(driver, post.id);
+
+      // 8. Модалка «About Reels»: Share (clips_nux_sheet_share_button). Резерв: original audio, если шит открылся с задержкой.
       const aboutReelsShareSelectors = [
+        '//*[@resource-id="com.instagram.android:id/clips_original_audio_nux_sheet_share_button"]',
+        'android=new UiSelector().resourceId("com.instagram.android:id/clips_original_audio_nux_sheet_share_button")',
         '//*[@resource-id="com.instagram.android:id/clips_nux_sheet_share_button"]',
         '~Share',
         '//*[@content-desc="Share"]',
@@ -708,7 +986,7 @@ export class AppiumPublishService {
 
       await delay(ACTION_DELAY_MS * 2);
 
-      await this.waitForPublishCompletion(driver);
+      await this.waitForPublishCompletion(driver, post.id);
 
       if (POST_PUBLISH_DELAY_MS > 0) {
         await delay(POST_PUBLISH_DELAY_MS);
@@ -722,7 +1000,7 @@ export class AppiumPublishService {
     post: { id: string; media_path: string; title: string | null; caption: string | null },
     attempt = 0,
   ): Promise<void> {
-    await this.launchYoutubeApp(driver, adbAddress);
+    await this.launchYoutubeApp(driver, adbAddress, post.id);
 
     const clickFirstVisible = async (selectors: string[]): Promise<boolean> => {
       for (const sel of selectors) {
@@ -1131,7 +1409,7 @@ export class AppiumPublishService {
       const pkg = await readCurrentPackage();
       if (pkg.includes('launcher')) {
         console.warn('[YT] Unexpected launcher foreground, relaunching YouTube before title fill');
-        await this.launchYoutubeApp(driver, adbAddress);
+        await this.launchYoutubeApp(driver, adbAddress, post.id);
         await delay(2000);
         titleFilled = await tryFillTitleFromPageSource();
       }
@@ -1248,58 +1526,241 @@ export class AppiumPublishService {
     await delay(ACTION_DELAY_MS);
 
     await delay(ACTION_DELAY_MS * 2);
-    await this.waitForYoutubeUploadFinish(driver);
+    await this.waitForYoutubeUploadFinish(driver, post.id);
     if (POST_PUBLISH_DELAY_MS > 0) await delay(POST_PUBLISH_DELAY_MS);
   }
 
   /**
-   * Публикация: adb push mp4 → Reels (Instagram) или Shorts (YouTube) по профилю.
+   * VK: клип — Create → Clip → выбор видео по basename в content-desc у picker_photo → Next → Next →
+   * подпись → Edit → Publish → ожидание «Clip published on profile» (id/title).
+   */
+  private async runVkClipFlow(
+    driver: WebdriverIO.Browser,
+    post: { id: string; media_path: string; caption: string | null },
+    adbAddress: string,
+  ): Promise<void> {
+    const clickFirstVisible = async (selectors: string[]): Promise<boolean> => {
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+
+    await driver.activateApp(VK_APP_ID);
+    await delay(ACTION_DELAY_MS);
+
+    // 1. Create
+    const createSelectors = [
+      '~Create',
+      '//*[@content-desc="Create"]',
+      '//*[@resource-id="com.vkontakte.android:id/posting_button_container"]',
+      '//*[@resource-id="com.vkontakte.android:id/posting_button"]',
+      'android=new UiSelector().description("Create")',
+    ];
+    if (!(await clickFirstVisible(createSelectors))) {
+      throw new Error(
+        'VK: не найдена кнопка Create (content-desc / posting_button). Обновите селекторы в runVkClipFlow.',
+      );
+    }
+    await delay(ACTION_DELAY_MS);
+
+    // 2. Clip
+    const clipSelectors = [
+      '//android.widget.TextView[@text="Clip"]',
+      '//*[@text="Clip"]',
+      '~Clip',
+    ];
+    if (!(await clickFirstVisible(clipSelectors))) {
+      throw new Error('VK: не найден пункт Clip в меню создания.');
+    }
+    await delay(ACTION_DELAY_MS);
+
+    // 3. Видео в галерее по имени файла (как в content-desc у picker_photo)
+    const baseName = path.basename(post.media_path);
+    const pickerXp = '//*[@resource-id="com.vkontakte.android:id/picker_photo"]';
+    let videoClicked = false;
+    const deadline = Date.now() + Math.max(POST_PUSH_DELAY_MS, 45000);
+    while (!videoClicked && Date.now() < deadline) {
+      this.publishCancelRegistry.throwIfCancelled(post.id);
+      try {
+        const els = await driver.$$(pickerXp);
+        const n = await els.length;
+        for (let i = 0; i < n; i++) {
+          const el = els[i];
+          try {
+            const desc = (await el.getAttribute('content-desc')) || '';
+            if (desc.includes(baseName) && (await el.isDisplayed())) {
+              await el.click();
+              videoClicked = true;
+              break;
+            }
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      if (!videoClicked) await delay(1500);
+    }
+    if (!videoClicked) {
+      throw new Error(
+        `VK: не найдено видео в пикере по имени «${baseName}» (picker_photo + content-desc). Проверьте adb push и индексацию медиа.`,
+      );
+    }
+    await delay(ACTION_DELAY_MS);
+
+    // 4–5. Next дважды
+    const nextSelectors = [
+      '//*[@resource-id="com.vkontakte.android:id/entry_points_photos_go"]',
+      '//*[@resource-id="com.vkontakte.android:id/ds_internal_button_title" and @text="Next"]',
+      '~Next',
+      '//*[@content-desc="Next"]',
+      '//*[@text="Next"]',
+    ];
+    for (let i = 0; i < 2; i++) {
+      if (!(await clickFirstVisible(nextSelectors))) {
+        throw new Error(`VK: не найдена кнопка Next (шаг ${i + 1} из 2).`);
+      }
+      await delay(ACTION_DELAY_MS);
+    }
+
+    // 6–8. Описание (до 4000 символов), сохранение через Edit
+    const cap = (post.caption || '').trim();
+    if (cap) {
+      const text = cap.length > 4000 ? cap.slice(0, 4000) : cap;
+      const descEntrySelectors = [
+        '~Add a description',
+        '//*[@content-desc="Add a description"]',
+      ];
+      await clickFirstVisible(descEntrySelectors);
+      await delay(1200);
+
+      const editSelectors = [
+        '//*[@resource-id="com.vkontakte.android:id/clip_description_edit"]',
+        '//android.widget.FrameLayout[@resource-id="com.vkontakte.android:id/clip_description_container"]//android.widget.EditText',
+      ];
+      let filled = false;
+      for (const sel of editSelectors) {
+        try {
+          const field = await driver.$(sel);
+          if (field && (await field.isDisplayed())) {
+            await field.setValue(text);
+            filled = true;
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+      if (!filled) {
+        throw new Error(
+          'VK: не найдено поле clip_description_edit для подписи к клипу.',
+        );
+      }
+      await delay(800);
+      const saveSelectors = [
+        '//*[@resource-id="com.vkontakte.android:id/ivEndIcon"]',
+        '~Edit',
+        '//*[@content-desc="Edit"]',
+      ];
+      if (!(await clickFirstVisible(saveSelectors))) {
+        throw new Error('VK: не найдена кнопка Edit для сохранения описания.');
+      }
+      await delay(ACTION_DELAY_MS);
+    }
+
+    // 9. Publish
+    const publishSelectors = [
+      '//android.widget.TextView[@text="Publish"]',
+      '//*[@text="Publish"]',
+      '~Publish',
+    ];
+    if (!(await clickFirstVisible(publishSelectors))) {
+      throw new Error('VK: не найдена кнопка Publish.');
+    }
+    await delay(2000);
+    await this.waitForVkClipPublishedSuccess(driver, post.id);
+    if (POST_PUBLISH_DELAY_MS > 0) await delay(POST_PUBLISH_DELAY_MS);
+  }
+
+  /**
+   * Публикация: adb push mp4 → Reels (Instagram), Shorts (YouTube) или Clip (VK) по профилю.
    */
   async publishWithAppium(
     post: { id: string; media_path: string; title: string | null; caption: string | null },
     adbAddress: string,
-    socialNetwork: 'instagram' | 'youtube' = 'instagram',
+    socialNetwork: 'instagram' | 'youtube' | 'vk' = 'instagram',
   ): Promise<void> {
-    this.vmManager.adbConnect(adbAddress);
-    await delay(1000);
-    this.pushMediaToDevice(adbAddress, post.media_path);
-    await delay(POST_PUSH_DELAY_MS);
-
-    this.vmManager.adbConnect(adbAddress);
-    await delay(2000);
-
-    let wdio: typeof import('webdriverio');
+    const postId = post.id;
     try {
-      wdio = await import('webdriverio');
-    } catch {
-      throw new Error(
-        'WebdriverIO не установлен. Выполните: npm install webdriverio @wdio/appium-service (в backend-nest).',
-      );
-    }
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      this.vmManager.adbConnect(adbAddress);
+      await this.delayCancellable(postId, 1000);
+      this.pushMediaToDevice(adbAddress, post.media_path);
+      await this.delayCancellable(postId, POST_PUSH_DELAY_MS);
 
-    const driver = await wdio.remote({
-      hostname: APPIUM_HOST,
-      port: APPIUM_PORT,
-      path: '/',
-      capabilities: {
-        platformName: 'Android',
-        'appium:automationName': 'UiAutomator2',
-        'appium:udid': adbAddress,
-        'appium:noReset': true,
-        'appium:adbExecTimeout': 60000,
-      },
-      connectionRetryCount: 3,
-      connectionRetryTimeout: 180000,
-    });
+      this.vmManager.adbConnect(adbAddress);
+      await this.delayCancellable(postId, 2000);
 
-    try {
-      if (socialNetwork === 'youtube') {
-        await this.runYoutubeShortFlow(driver, adbAddress, post);
-      } else {
-        await this.runInstagramReelFlow(driver, post);
+      let wdio: typeof import('webdriverio');
+      try {
+        wdio = await import('webdriverio');
+      } catch {
+        throw new Error(
+          'WebdriverIO не установлен. Выполните: npm install webdriverio @wdio/appium-service (в backend-nest).',
+        );
+      }
+
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      const driver = await wdio.remote({
+        hostname: APPIUM_HOST,
+        port: APPIUM_PORT,
+        path: '/',
+        capabilities: {
+          platformName: 'Android',
+          'appium:automationName': 'UiAutomator2',
+          'appium:udid': adbAddress,
+          'appium:noReset': true,
+          'appium:adbExecTimeout': 60000,
+        },
+        connectionRetryCount: 3,
+        connectionRetryTimeout: 180000,
+      });
+
+      let sessionClosed = false;
+      const closeDriver = async () => {
+        if (sessionClosed) return;
+        sessionClosed = true;
+        try {
+          await driver.deleteSession();
+        } catch {
+          // сессия уже закрыта (отмена) или устройство недоступно
+        }
+      };
+      this.publishCancelRegistry.registerSessionCloser(postId, closeDriver);
+      try {
+        if (socialNetwork === 'youtube') {
+          await this.runYoutubeShortFlow(driver, adbAddress, post);
+        } else if (socialNetwork === 'vk') {
+          await this.runVkClipFlow(driver, post, adbAddress);
+        } else {
+          await this.runInstagramReelFlow(driver, post);
+        }
+      } finally {
+        await closeDriver();
+        this.publishCancelRegistry.unregisterSessionCloser(postId);
       }
     } finally {
-      await driver.deleteSession();
+      this.publishCancelRegistry.clearCancelled(postId);
     }
   }
 }

@@ -17,6 +17,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [configureConfigPopup, setConfigureConfigPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [installInstagramPopup, setInstallInstagramPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [installYoutubePopup, setInstallYoutubePopup] = useState({ visible: false, vmId: null, vmName: '' });
+  const [installVkPopup, setInstallVkPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [proxyChangePopup, setProxyChangePopup] = useState({
     visible: false,
     vmId: null,
@@ -29,6 +30,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [firstStartConfirmPopup, setFirstStartConfirmPopup] = useState({ visible: false, vmId: null, vmName: '' });
   const [installingInstagramId, setInstallingInstagramId] = useState(null);
   const [installingYoutubeId, setInstallingYoutubeId] = useState(null);
+  const [installingVkId, setInstallingVkId] = useState(null);
 
   const handleSave = async () => {
     if (!name?.trim()) {
@@ -212,6 +214,38 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
 
   const handleInstallYoutubeCancel = () => {
     setInstallYoutubePopup({ visible: false, vmId: null, vmName: '' });
+  };
+
+  const doInstallVk = async (id) => {
+    setInstallingVkId(id);
+    try {
+      await vmApi.installVk(id);
+      showToast('VK установлен для VM', 'success');
+      onSave();
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      setInstallingVkId(null);
+    }
+  };
+
+  const handleInstallVkClick = (v) => {
+    if (v.status === 'running') {
+      doInstallVk(v.id);
+    } else {
+      setInstallVkPopup({ visible: true, vmId: v.id, vmName: v.name || 'VM' });
+    }
+  };
+
+  const handleInstallVkConfirm = async () => {
+    const { vmId } = installVkPopup;
+    setInstallVkPopup({ visible: false, vmId: null, vmName: '' });
+    if (!vmId) return;
+    await doInstallVk(vmId);
+  };
+
+  const handleInstallVkCancel = () => {
+    setInstallVkPopup({ visible: false, vmId: null, vmName: '' });
   };
 
   const handleDeleteClick = (id) => {
@@ -398,7 +432,9 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
                   type="button"
                   className="btn small"
                   onClick={() => handleInstallInstagramClick(v)}
-                  disabled={!!v.instagram_installed || !!installingInstagramId}
+                  // временно: не отключаем кнопку после установки Instagram
+                  // disabled={!!v.instagram_installed || !!installingInstagramId}
+                  disabled={!!installingInstagramId}
                 >
                   {installingInstagramId === v.id ? (
                     <>
@@ -426,6 +462,25 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
                     'YouTube установлен'
                   ) : (
                     'Установить YouTube'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="btn small"
+                  onClick={() => handleInstallVkClick(v)}
+                  // временно: не отключаем кнопку после установки VK
+                  // disabled={!!v.vk_installed || !!installingVkId}
+                  disabled={!!installingVkId}
+                >
+                  {installingVkId === v.id ? (
+                    <>
+                      <span className="loader-spinner" aria-hidden="true" />
+                      Установка…
+                    </>
+                  ) : v.vk_installed ? (
+                    'VK установлен'
+                  ) : (
+                    'Установить VK'
                   )}
                 </button>
                 <button type="button" className="btn small danger" onClick={() => handleDeleteClick(v.id)}>Удалить</button>
@@ -521,6 +576,23 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
             <div className="modal-actions">
               <button type="button" className="btn" onClick={handleInstallYoutubeCancel}>Отмена</button>
               <button type="button" className="btn primary" onClick={handleInstallYoutubeConfirm}>Установить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {installVkPopup.visible && (
+        <div className="modal-overlay" onClick={handleInstallVkCancel}>
+          <div className="modal delete-confirm-modal install-instagram-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="install-instagram-icon">ℹ</div>
+            <h3>Установить VK</h3>
+            <p className="modal-vm-name">{installVkPopup.vmName}</p>
+            <p className="delete-confirm-warning">
+              Для установки VK VM должна быть запущена. Укажите каталог с split APK (базовый VK-*.apk и config.*.apk) через VK_APK на сервере. Запустите VM и нажмите «Установить».
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={handleInstallVkCancel}>Отмена</button>
+              <button type="button" className="btn primary" onClick={handleInstallVkConfirm}>Установить</button>
             </div>
           </div>
         </div>

@@ -93,6 +93,7 @@ export class DatabaseService implements OnModuleInit {
     this.migrateScheduledPostUrl(db);
     this.migrateProfileSocialNetwork(db);
     this.migrateVmYoutubeInstalled(db);
+    this.migrateVmVkInstalled(db);
     this.migrateProfileMultiPerVm(db);
     this.migrateScheduledPostTitle(db);
   }
@@ -152,6 +153,15 @@ export class DatabaseService implements OnModuleInit {
     db.exec(`
       ALTER TABLE vm ADD COLUMN youtube_installed INTEGER DEFAULT 0;
       INSERT INTO _migrations (name) VALUES ('vm_youtube_installed');
+    `);
+  }
+
+  private migrateVmVkInstalled(db: Database.Database): void {
+    const exists = db.prepare("SELECT 1 FROM _migrations WHERE name = ?").get('vm_vk_installed');
+    if (exists) return;
+    db.exec(`
+      ALTER TABLE vm ADD COLUMN vk_installed INTEGER DEFAULT 0;
+      INSERT INTO _migrations (name) VALUES ('vm_vk_installed');
     `);
   }
 

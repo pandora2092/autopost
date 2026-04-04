@@ -74,13 +74,23 @@ export class PostRunnerService {
         password: row.proxy_password ?? undefined,
       });
     }
+    const snRaw = (row.social_network || 'instagram').toLowerCase();
+    const socialNetworkEarly =
+      snRaw === 'youtube' ? 'youtube' : snRaw === 'vk' ? 'vk' : 'instagram';
+    const densityMode =
+      socialNetworkEarly === 'vk'
+        ? 'vk_larger'
+        : socialNetworkEarly === 'youtube'
+          ? 'youtube'
+          : 'default';
+    this.vmManager.applyDisplayDensity(adbAddress, densityMode);
     const useAppium = process.env.USE_APPIUM === '1' || process.env.USE_APPIUM === 'true';
     if (!useAppium) {
       throw new Error(
         'Для публикации необходим Appium. Задайте USE_APPIUM=1 и запустите Appium server (подключённый к устройству по ADB).',
       );
     }
-    const socialNetwork = row.social_network === 'youtube' ? 'youtube' : 'instagram';
+    const socialNetwork = socialNetworkEarly;
     await this.appiumPublish.publishWithAppium(
       { id: post.id, media_path: row.media_path, title: row.title, caption: row.caption },
       adbAddress,

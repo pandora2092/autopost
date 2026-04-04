@@ -1,5 +1,11 @@
 import { getPostStatusLabel } from '../api';
 
+function queueNetworkLabel(sn) {
+  if (sn === 'youtube') return 'YouTube';
+  if (sn === 'vk') return 'VK';
+  return 'Instagram';
+}
+
 export default function QueueSection({ queue, stats }) {
   const posts = stats.posts || {};
   const postEntries = Object.entries(posts).filter(([status, n]) => n > 0 && status !== 'simulated');
@@ -36,7 +42,7 @@ export default function QueueSection({ queue, stats }) {
           ? queue.pending.map((p) => (
               <div key={p.id} className="list-item">
                 <span>
-                  {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                  {queueNetworkLabel(p.social_network)}
                   {p.instagram_username ? ` · ${p.instagram_username}` : ` · ${p.profile_id}`}
                 </span>
                 <span>{new Date(p.scheduled_at).toLocaleString()}</span>
@@ -52,7 +58,7 @@ export default function QueueSection({ queue, stats }) {
             {queue.recent.map((p) => (
               <div key={p.id} className="list-item">
                 <span>
-                  {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                  {queueNetworkLabel(p.social_network)}
                   {p.instagram_username ? ` · ${p.instagram_username}` : ''}
                 </span>
                 <span>{p.published_at ? new Date(p.published_at).toLocaleString() : ''}</span>

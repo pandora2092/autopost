@@ -3,7 +3,19 @@ import { DatabaseService } from '../database/database.service';
 import { VmManagerService } from '../vm/vm-manager.service';
 import { v4 as uuidv4 } from 'uuid';
 
-export type SocialNetwork = 'instagram' | 'youtube';
+export type SocialNetwork = 'instagram' | 'youtube' | 'vk';
+
+function normalizeSocialNetwork(raw: string | undefined): SocialNetwork {
+  if (raw === 'youtube') return 'youtube';
+  if (raw === 'vk') return 'vk';
+  return 'instagram';
+}
+
+function socialNetworkConflictLabel(sn: SocialNetwork): string {
+  if (sn === 'youtube') return 'YouTube';
+  if (sn === 'vk') return 'VK';
+  return 'Instagram';
+}
 
 export interface CreateProfileDto {
   vm_id: string;
@@ -48,16 +60,12 @@ export class ProfilesService {
   create(dto: CreateProfileDto) {
     if (!dto.vm_id) throw new Error('vm_id обязателен');
     const db = this.db.getDb();
-    const socialNetwork: SocialNetwork = dto.social_network === 'youtube' ? 'youtube' : 'instagram';
+    const socialNetwork = normalizeSocialNetwork(dto.social_network);
     const existing = db
       .prepare('SELECT id FROM profile WHERE vm_id = ? AND social_network = ?')
       .get(dto.vm_id, socialNetwork);
     if (existing) {
-      throw new ConflictException(
-        socialNetwork === 'youtube'
-          ? 'Профиль YouTube для этой VM уже существует'
-          : 'Профиль Instagram для этой VM уже существует',
-      );
+      throw new ConflictException(`Профиль ${socialNetworkConflictLabel(socialNetwork)} для этой VM уже существует`);
     }
     const vmExists = db.prepare('SELECT id FROM vm WHERE id = ?').get(dto.vm_id);
     if (!vmExists) throw new NotFoundException('VM не найдена');
@@ -76,18 +84,14 @@ export class ProfilesService {
     if (dto.instagram_authorized !== undefined)
       db.prepare('UPDATE profile SET instagram_authorized = ? WHERE id = ?').run(dto.instagram_authorized ? 1 : 0, id);
     if (dto.social_network !== undefined) {
-      const sn = dto.social_network === 'youtube' ? 'youtube' : 'instagram';
+      const sn = normalizeSocialNetwork(dto.social_network);
       const current = db.prepare('SELECT vm_id FROM profile WHERE id = ?').get(id) as { vm_id: string } | undefined;
       if (current) {
         const clash = db
           .prepare('SELECT id FROM profile WHERE vm_id = ? AND social_network = ? AND id != ?')
           .get(current.vm_id, sn, id);
         if (clash) {
-          throw new ConflictException(
-            sn === 'youtube'
-              ? 'Профиль YouTube для этой VM уже существует'
-              : 'Профиль Instagram для этой VM уже существует',
-          );
+          throw new ConflictException(`Профиль ${socialNetworkConflictLabel(sn)} для этой VM уже существует`);
         }
       }
       db.prepare('UPDATE profile SET social_network = ? WHERE id = ?').run(sn, id);

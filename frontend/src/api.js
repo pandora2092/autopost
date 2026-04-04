@@ -69,6 +69,7 @@ export const vmApi = {
   getIp: (id, save = true) => request(`/vm/${id}/ip?save=${save ? '1' : '0'}`),
   installInstagram: (id) => request(`/vm/${id}/install-instagram`, { method: 'POST', body: JSON.stringify({}) }),
   installYoutube: (id) => request(`/vm/${id}/install-youtube`, { method: 'POST', body: JSON.stringify({}) }),
+  installVk: (id) => request(`/vm/${id}/install-vk`, { method: 'POST', body: JSON.stringify({}) }),
   applyProxy: (id, pushConfig = false) =>
     request(`/vm/${id}/apply-proxy`, { method: 'POST', body: JSON.stringify({ pushConfig }) }),
 };

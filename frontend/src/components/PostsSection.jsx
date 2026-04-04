@@ -18,8 +18,30 @@ function formatDateTimeLocalValue(date) {
 }
 
 function formatProfileOption(p) {
-  const net = p.social_network === 'youtube' ? 'YouTube' : 'Instagram';
+  const net =
+    p.social_network === 'youtube' ? 'YouTube' : p.social_network === 'vk' ? 'VK' : 'Instagram';
   return `${p.vm_name} · ${net}${p.instagram_username ? ` (${p.instagram_username})` : ''}`;
+}
+
+function postListNetworkLabel(sn) {
+  if (sn === 'youtube') return 'YouTube';
+  if (sn === 'vk') return 'VK';
+  return 'Instagram';
+}
+
+function publishedProfileHref(p) {
+  if (p.post_url) return p.post_url;
+  const u = (p.instagram_username || '').replace(/^@/, '');
+  if (!u) return '#';
+  if (p.social_network === 'youtube') return `https://www.youtube.com/@${encodeURIComponent(u)}`;
+  if (p.social_network === 'vk') return `https://vk.com/${encodeURIComponent(u)}`;
+  return `https://www.instagram.com/${u}/`;
+}
+
+function publishedLinkLabel(sn) {
+  if (sn === 'youtube') return 'Открыть канал на YouTube';
+  if (sn === 'vk') return 'Открыть профиль VK';
+  return 'Открыть пост в Instagram';
 }
 
 function dateTimeLocalToISOString(value) {
@@ -272,7 +294,7 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
           <div key={p.id} className="post-card">
             <div className="post-card-header">
               <strong className="post-card-profile">
-                {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+                {postListNetworkLabel(p.social_network)}
                 {p.instagram_username ? ` · @${p.instagram_username}` : ` · ${p.profile_id}`}
               </strong>
               <span className={`status ${p.status}`}>{getPostStatusLabel(p.status)}</span>
@@ -283,17 +305,8 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
             </div>
             {p.status === 'published' && (p.post_url || p.instagram_username) && (
               <div className="post-card-link">
-                <a
-                  href={
-                    p.post_url ||
-                    (p.social_network === 'youtube' && p.instagram_username
-                      ? `https://www.youtube.com/@${String(p.instagram_username).replace(/^@/, '')}`
-                      : `https://www.instagram.com/${p.instagram_username}`)
-                  }
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {p.social_network === 'youtube' ? 'Открыть канал на YouTube' : 'Открыть пост в Instagram'}
+                <a href={publishedProfileHref(p)} target="_blank" rel="noreferrer">
+                  {publishedLinkLabel(p.social_network)}
                 </a>
               </div>
             )}
@@ -302,9 +315,9 @@ export default function PostsSection({ posts, profiles, onSave, onCancel, showTo
                 {p.error_message}
               </div>
             )}
-            {(p.status === 'pending' || p.status === 'failed') && (
+            {(p.status === 'pending' || p.status === 'publishing' || p.status === 'failed') && (
               <div className="post-card-actions">
-                {p.status === 'pending' && (
+                {(p.status === 'pending' || p.status === 'publishing') && (
                   <button type="button" className="btn small danger" onClick={() => handleCancel(p.id)}>Отменить</button>
                 )}
                 {p.status === 'failed' && (

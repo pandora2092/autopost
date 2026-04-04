@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { UploadService } from '../upload/upload.service';
+import { VmManagerService } from '../vm/vm-manager.service';
+import { PublishCancellationRegistry } from '../scheduler/publish-cancellation.registry';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface CreatePostDto {
@@ -23,6 +25,8 @@ export class PostsService {
   constructor(
     private readonly db: DatabaseService,
     private readonly uploadService: UploadService,
+    private readonly vmManager: VmManagerService,
+    private readonly publishCancelRegistry: PublishCancellationRegistry,
   ) {}
 
   findAll(status?: string, profile_id?: string) {
@@ -94,8 +98,37 @@ export class PostsService {
   }
 
   cancel(id: string) {
-    const r = this.db.getDb().prepare('UPDATE scheduled_post SET status = ? WHERE id = ?').run('cancelled', id);
-    if (r.changes === 0) throw new NotFoundException('Пост не найден');
+    const db = this.db.getDb();
+    const row = db
+      .prepare(
+        `SELECT s.status AS status, v.libvirt_domain AS libvirt_domain, v.id AS vm_id
+         FROM scheduled_post s
+         JOIN profile pr ON pr.id = s.profile_id
+         JOIN vm v ON v.id = pr.vm_id
+         WHERE s.id = ?`,
+      )
+      .get(id) as { status: string; libvirt_domain: string; vm_id: string } | undefined;
+    if (!row) throw new NotFoundException('Пост не найден');
+    if (!['pending', 'assigned', 'publishing'].includes(row.status)) {
+      throw new BadRequestException('Нельзя отменить пост в этом статусе');
+    }
+    if (row.status === 'publishing') {
+      this.publishCancelRegistry.requestCancel(id);
+    }
+    const r = db
+      .prepare(
+        "UPDATE scheduled_post SET status = 'cancelled', error_message = NULL, updated_at = datetime('now') WHERE id = ? AND status IN ('pending','assigned','publishing')",
+      )
+      .run(id);
+    if (r.changes === 0) throw new BadRequestException('Пост уже обработан');
+    if (row.status === 'publishing') {
+      try {
+        this.vmManager.forceStopVm(row.libvirt_domain);
+        db.prepare("UPDATE vm SET status = 'stopped', updated_at = datetime('now') WHERE id = ?").run(row.vm_id);
+      } catch (e) {
+        console.warn('PostsService.cancel: forceStopVm failed', (e as Error)?.message);
+      }
+    }
     return { status: 'cancelled' };
   }
 

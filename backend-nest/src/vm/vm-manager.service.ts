@@ -9,8 +9,93 @@ export class VmManagerService {
     process.env.SCRIPTS_DIR || path.resolve(__dirname, '../../../scripts');
   private readonly templateDomain = process.env.VM_TEMPLATE_DOMAIN || 'android-template';
 
+  /** После смены density перезапускаем процессы — иначе VK/YouTube держат старый Configuration. */
+  private readonly densityAwarePackagesDefault = [
+    'com.instagram.android',
+    'com.google.android.youtube',
+    'com.vkontakte.android',
+  ] as const;
+
   private run(cmd: string, options: { timeout?: number } = {}) {
     return execSync(cmd, { encoding: 'utf8', timeout: options.timeout ?? 120000 });
+  }
+
+  /** adb shell <args...> без исключения при ненулевом коде (для wm/settings). */
+  private adbShellSpawn(
+    adbAddress: string,
+    shellArgs: string[],
+    timeoutMs: number,
+  ): { code: number | null; out: string } {
+    const r = spawnSync('adb', ['-s', adbAddress, 'shell', ...shellArgs], {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
+    return { code: r.status, out };
+  }
+
+  private parseWmDensityReport(text: string): { physical: number | null; override: number | null } {
+    const physical =
+      text.match(/Physical density:\s*(\d+)/i)?.[1] ??
+      text.match(/Физическая[^:]{0,40}:\s*(\d+)/i)?.[1];
+    const override = text.match(/Override density:\s*(\d+)/i)?.[1] ?? text.match(/Переопредел[^:]{0,40}:\s*(\d+)/i)?.[1];
+    return {
+      physical: physical ? parseInt(physical, 10) : null,
+      override: override ? parseInt(override, 10) : null,
+    };
+  }
+
+  private getPropLcdDensity(adbAddress: string): number | null {
+    const { code, out } = this.adbShellSpawn(adbAddress, ['getprop', 'ro.sf.lcd_density'], 10000);
+    if (code !== 0) return null;
+    const m = out.match(/^\s*(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  /**
+   * После adb root adbd перезапускается — переподключаемся.
+   * VK_DISPLAY_ADB_ROOT=0 — не вызывать root (production-сборки без root).
+   */
+  private adbTryRootAndReconnect(adbAddress: string): boolean {
+    if (process.env.VK_DISPLAY_ADB_ROOT === '0' || process.env.VK_DISPLAY_ADB_ROOT === 'false') {
+      return false;
+    }
+    const r = spawnSync('adb', ['-s', adbAddress, 'root'], { encoding: 'utf8', timeout: 25000 });
+    if (r.status !== 0) {
+      console.warn('applyDisplayDensity: adb root не удался:', (r.stderr || r.stdout || '').trim());
+      return false;
+    }
+    spawnSync('sleep', ['2'], { timeout: 5000 });
+    this.adbConnect(adbAddress);
+    return true;
+  }
+
+  /**
+   * Как в «Настройки → Display size»: и wm, и display_density_forced должны совпадать.
+   * Отключить запись в Settings (если на образе ломает масштаб): DISPLAY_DENSITY_SYNC_SETTINGS=0
+   */
+  private displayDensityShouldSyncSettings(): boolean {
+    const v = (process.env.DISPLAY_DENSITY_SYNC_SETTINGS || '').toLowerCase();
+    if (v === '0' || v === 'false' || v === 'no') return false;
+    if (v === '1' || v === 'true' || v === 'yes') return true;
+    return true;
+  }
+
+  private forceStopDensityAwareApps(adbAddress: string, logPrefix: string): void {
+    const off = (process.env.DISPLAY_DENSITY_FORCE_STOP_APPS || '').toLowerCase();
+    if (off === '0' || off === 'false' || off === 'no') return;
+    const raw = (process.env.DISPLAY_DENSITY_FORCE_STOP_PACKAGES || '').trim();
+    const pkgs = raw
+      ? raw.split(',').map((p) => p.trim()).filter(Boolean)
+      : [...this.densityAwarePackagesDefault];
+    const timeout = 15000;
+    for (const pkg of pkgs) {
+      const r = this.adbShellSpawn(adbAddress, ['am', 'force-stop', pkg], timeout);
+      if (r.code !== 0) {
+        console.warn(logPrefix, 'am force-stop', pkg, r.out || `exit ${r.code}`);
+      }
+    }
+    spawnSync('sleep', ['1'], { timeout: 2000 });
   }
 
   listDomains(): { id: string; name: string; state: string }[] {
@@ -179,6 +264,124 @@ export class VmManagerService {
     return null;
   }
 
+  /**
+   * Перед Appium: плотность как в системных настройках.
+   * - **wm density** + при необходимости **settings {secure,global} display_density_forced** (одно значение с wm).
+   * - Затем **am force-stop** Instagram / YouTube / VK — иначе часть приложений не перечитывает Configuration
+   *   (остаётся layout «как до смены», в отличие от ручного Display size).
+   * DISPLAY_DENSITY_SYNC_SETTINGS=0 — не писать в Settings (старый обход для кривых образов).
+   * DISPLAY_DENSITY_FORCE_STOP_APPS=0 — не убивать процессы.
+   * DISPLAY_DENSITY_FORCE_STOP_PACKAGES — свои пакеты через запятую.
+   * VK / YouTube DPI: VK_*, YOUTUBE_WM_DENSITY. Root: VK_DISPLAY_ADB_ROOT=0 отключает.
+   */
+  applyDisplayDensity(adbAddress: string, mode: 'default' | 'vk_larger' | 'youtube'): void {
+    this.adbConnect(adbAddress);
+    if (!this.isAdbReady(adbAddress)) {
+      console.warn('applyDisplayDensity: ADB не готов', adbAddress);
+      return;
+    }
+    const timeout = 20000;
+    const logPrefix = 'applyDisplayDensity:';
+
+    const applyForcedSetting = (target: number | null) => {
+      if (target == null) {
+        this.adbShellSpawn(adbAddress, ['settings', 'delete', 'secure', 'display_density_forced'], timeout);
+        this.adbShellSpawn(adbAddress, ['settings', 'delete', 'global', 'display_density_forced'], timeout);
+        return;
+      }
+      let r = this.adbShellSpawn(
+        adbAddress,
+        ['settings', 'put', 'secure', 'display_density_forced', String(target)],
+        timeout,
+      );
+      if (r.code !== 0) {
+        r = this.adbShellSpawn(
+          adbAddress,
+          ['settings', 'put', 'global', 'display_density_forced', String(target)],
+          timeout,
+        );
+      }
+      if (r.code !== 0) {
+        console.warn(logPrefix, 'settings display_density_forced:', r.out || `exit ${r.code}`);
+      }
+    };
+
+    const wmDensitySet = (dpi: number | 'reset'): boolean => {
+      const args = dpi === 'reset' ? ['wm', 'density', 'reset'] : ['wm', 'density', String(dpi)];
+      const r = this.adbShellSpawn(adbAddress, args, timeout);
+      if (r.code !== 0) {
+        console.warn(logPrefix, args.join(' '), 'failed:', r.out || `exit ${r.code}`);
+        return false;
+      }
+      return true;
+    };
+
+    const readWmDensity = () => {
+      const r = this.adbShellSpawn(adbAddress, ['wm', 'density'], timeout);
+      return this.parseWmDensityReport(r.out);
+    };
+
+    if (mode === 'default') {
+      wmDensitySet('reset');
+      applyForcedSetting(null);
+      this.forceStopDensityAwareApps(adbAddress, logPrefix);
+      return;
+    }
+
+    let target: number;
+    const syncSettingsDensity = this.displayDensityShouldSyncSettings();
+
+    if (mode === 'youtube') {
+      wmDensitySet('reset');
+      applyForcedSetting(null);
+      const ytRaw = (process.env.YOUTUBE_WM_DENSITY || '120').trim();
+      target = /^\d+$/.test(ytRaw) ? parseInt(ytRaw, 10) : 120;
+    } else {
+      const explicit = (process.env.VK_WM_DENSITY || '').trim();
+      if (/^\d+$/.test(explicit)) {
+        wmDensitySet('reset');
+        applyForcedSetting(null);
+        target = parseInt(explicit, 10);
+      } else {
+        wmDensitySet('reset');
+        applyForcedSetting(null);
+        let { physical } = readWmDensity();
+        if (physical == null) physical = this.getPropLcdDensity(adbAddress);
+        if (physical == null) physical = 420;
+        const delta = parseInt(process.env.VK_DISPLAY_DENSITY_DELTA || '-96', 10);
+        const minDpi = parseInt(process.env.VK_DISPLAY_DENSITY_MIN || '72', 10);
+        const maxDpi = parseInt(process.env.VK_DISPLAY_DENSITY_MAX || '800', 10);
+        target = Math.max(minDpi, Math.min(maxDpi, physical + delta));
+      }
+    }
+
+    const tryApply = (): boolean => {
+      if (!wmDensitySet(target)) return false;
+      if (syncSettingsDensity) {
+        applyForcedSetting(target);
+      }
+      const { override } = readWmDensity();
+      if (override != null && Math.abs(override - target) > 2) {
+        console.warn(logPrefix, `Override density ${override} ≠ целевой ${target}, пробуем root или проверьте права shell`);
+        return false;
+      }
+      return true;
+    };
+
+    let applied = tryApply();
+    if (!applied && this.adbTryRootAndReconnect(adbAddress) && this.isAdbReady(adbAddress)) {
+      applied = tryApply();
+    }
+    if (!applied) {
+      console.warn(
+        logPrefix,
+        'wm density не сработал; для QEMU/Android-x86 часто нужен root (userdebug), либо проверьте VK_WM_DENSITY / YOUTUBE_WM_DENSITY вручную: adb shell wm density',
+      );
+      return;
+    }
+    this.forceStopDensityAwareApps(adbAddress, logPrefix);
+  }
+
   /** Проверяет, что устройство доступно по ADB (Android часто не отвечает на ping). */
   private isAdbReady(adbAddress: string): boolean {
     try {
@@ -278,6 +481,16 @@ export class VmManagerService {
   /** Установка YouTube APK на устройство по adb_address (IP:port). Скрипт: install-youtube.sh, env YOUTUBE_APK. */
   installYoutube(adbAddress: string, apkPath?: string): { output: string } {
     const script = path.join(this.scriptsDir, 'install-youtube.sh');
+    if (!fs.existsSync(script)) throw new Error(`Скрипт не найден: ${script}`);
+    const args = [script, adbAddress];
+    if (apkPath) args.push(apkPath);
+    const out = this.run(args.map((a) => `"${a}"`).join(' '));
+    return { output: out };
+  }
+
+  /** Установка VK (split APK). Скрипт: install-vk.sh, env VK_APK. */
+  installVk(adbAddress: string, apkPath?: string): { output: string } {
+    const script = path.join(this.scriptsDir, 'install-vk.sh');
     if (!fs.existsSync(script)) throw new Error(`Скрипт не найден: ${script}`);
     const args = [script, adbAddress];
     if (apkPath) args.push(apkPath);

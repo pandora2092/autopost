@@ -2,6 +2,18 @@ import { useState, useMemo } from 'react';
 import { profilesApi } from '../api';
 import Pagination, { paginate, DEFAULT_PAGE_SIZE } from './Pagination';
 
+function profileListNetworkSuffix(sn) {
+  if (sn === 'youtube') return ' · YouTube';
+  if (sn === 'vk') return ' · VK';
+  return '';
+}
+
+function profileListNetworkLabel(sn) {
+  if (sn === 'youtube') return 'YouTube';
+  if (sn === 'vk') return 'VK';
+  return 'Instagram';
+}
+
 export default function ProfilesSection({ profiles, vms, onSave, onDelete, showToast }) {
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
@@ -68,7 +80,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     setDeleteConfirmPopup({
       visible: true,
       profileId: p.id,
-      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${p.social_network === 'youtube' ? ' · YouTube' : ''}`,
+      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${profileListNetworkSuffix(p.social_network)}`,
     });
   };
 
@@ -97,7 +109,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     setClearMediaConfirmPopup({
       visible: true,
       profileId: p.id,
-      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${p.social_network === 'youtube' ? ' · YouTube' : ''}`,
+      profileLabel: `${p.vm_name}${p.instagram_username ? ` (@${p.instagram_username})` : ''}${profileListNetworkSuffix(p.social_network)}`,
     });
   };
 
@@ -129,7 +141,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
       {showForm && (
         <div className="post-form card-inner">
           <p style={{ marginBottom: '0.75rem', color: 'var(--muted, #565f89)', fontSize: '0.9rem' }}>
-            Для одной VM можно добавить отдельные профили Instagram и YouTube. Нельзя создать два профиля одной и той же соцсети на ту же VM.
+            Для одной VM можно добавить отдельные профили Instagram, YouTube и VK. Нельзя создать два профиля одной и той же соцсети на ту же VM.
           </p>
           <div className="post-form-row">
             <label className="post-form-label">VM</label>
@@ -153,16 +165,27 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
             >
               <option value="instagram">Instagram (Reels)</option>
               <option value="youtube">YouTube (Shorts)</option>
+              <option value="vk">VK</option>
             </select>
           </div>
           <div className="post-form-row">
             <label className="post-form-label">
-              {socialNetwork === 'youtube' ? 'Канал / @handle (опц.)' : 'Логин Instagram (опц.)'}
+              {socialNetwork === 'youtube'
+                ? 'Канал / @handle (опц.)'
+                : socialNetwork === 'vk'
+                  ? 'Короткое имя / id VK (опц.)'
+                  : 'Логин Instagram (опц.)'}
             </label>
             <input
               type="text"
               className="post-form-input-wide"
-              placeholder={socialNetwork === 'youtube' ? 'Например mychannel' : 'Логин Instagram (опц.)'}
+              placeholder={
+                socialNetwork === 'youtube'
+                  ? 'Например mychannel'
+                  : socialNetwork === 'vk'
+                    ? 'Например id123456 или screen_name'
+                    : 'Логин Instagram (опц.)'
+              }
               value={instagramUsername}
               onChange={(e) => setInstagramUsername(e.target.value)}
             />
@@ -178,7 +201,7 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
           <div key={p.id} className="list-item">
             <span><strong>{p.vm_name}</strong></span>
             <span>
-              {p.social_network === 'youtube' ? 'YouTube' : 'Instagram'}
+              {profileListNetworkLabel(p.social_network)}
               {p.instagram_username ? ` · @${p.instagram_username}` : ''}
             </span>
             <span className={`status ${p.instagram_authorized ? 'authorized' : 'not-authorized'}`}>
