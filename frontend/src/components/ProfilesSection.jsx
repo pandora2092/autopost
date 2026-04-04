@@ -17,6 +17,11 @@ function profileListNetworkLabel(sn) {
 export default function ProfilesSection({ profiles, vms, onSave, onDelete, showToast }) {
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
+  const vmStatusById = useMemo(() => {
+    const m = Object.create(null);
+    for (const v of vms) m[v.id] = v.status;
+    return m;
+  }, [vms]);
   const { pageItems, currentPage, totalPages, total } = useMemo(
     () => paginate(profiles, page, DEFAULT_PAGE_SIZE),
     [profiles, page]
@@ -55,9 +60,16 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
     }
   };
 
+  const effectiveVmStatus = (p) => {
+    if (!p?.vm_id) return p?.vm_status;
+    const fromVms = vmStatusById[p.vm_id];
+    return fromVms !== undefined && fromVms !== null ? fromVms : p.vm_status;
+  };
+
   const handleOpenStream = async (profileId) => {
     const p = profiles.find((x) => x.id === profileId);
-    if (p && p.vm_status && p.vm_status !== 'running') {
+    const st = effectiveVmStatus(p);
+    if (p && st && st !== 'running') {
       setStreamWarnPopup({ visible: true, vmName: p.vm_name || '' });
       return;
     }
@@ -102,7 +114,8 @@ export default function ProfilesSection({ profiles, vms, onSave, onDelete, showT
   };
 
   const handleClearMediaClick = (p) => {
-    if (p.vm_status && p.vm_status !== 'running') {
+    const st = effectiveVmStatus(p);
+    if (st && st !== 'running') {
       setStreamWarnPopup({ visible: true, vmName: p.vm_name || '' });
       return;
     }

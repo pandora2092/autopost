@@ -1,7 +1,30 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import type { Request } from 'express';
 import { DatabaseService } from '../database/database.service';
 import { VmManagerService } from '../vm/vm-manager.service';
 import { v4 as uuidv4 } from 'uuid';
+
+/** Базовый URL UI ws-scrcpy для браузера: явный STREAM_WEB_BASE или STREAM_WEB_RELATIVE + Host из запроса. */
+function resolveStreamWebBase(req?: Request): string | undefined {
+  const explicit = process.env.STREAM_WEB_BASE?.trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+
+  const rel = process.env.STREAM_WEB_RELATIVE?.trim();
+  if (!rel || !req) return undefined;
+
+  const path = (rel.startsWith('/') ? rel : `/${rel}`).replace(/\/$/, '');
+
+  const xfProtoRaw = req.headers['x-forwarded-proto'];
+  const xfProto = (Array.isArray(xfProtoRaw) ? xfProtoRaw[0] : xfProtoRaw)?.split(',')[0]?.trim();
+  const proto = xfProto || req.protocol || 'http';
+
+  const xfHostRaw = req.headers['x-forwarded-host'];
+  const host =
+    (Array.isArray(xfHostRaw) ? xfHostRaw[0] : xfHostRaw)?.split(',')[0]?.trim() || req.get('host');
+  if (!host) return undefined;
+
+  return `${proto}://${host}${path}`;
+}
 
 export type SocialNetwork = 'instagram' | 'youtube' | 'vk';
 
@@ -37,13 +60,44 @@ export class ProfilesService {
   ) {}
 
   findAll() {
-    return this.db.getDb()
+    const db = this.db.getDb();
+    const rows = db
       .prepare(
         `SELECT pr.id, pr.vm_id, pr.instagram_username, pr.social_network, pr.instagram_authorized, pr.created_at,
-                v.name AS vm_name, v.adb_address, v.status AS vm_status
+                v.name AS vm_name, v.adb_address, v.status AS vm_status, v.libvirt_domain
          FROM profile pr JOIN vm v ON v.id = pr.vm_id ORDER BY pr.created_at DESC`,
       )
-      .all();
+      .all() as Array<{
+      id: string;
+      vm_id: string;
+      instagram_username: string | null;
+      social_network: string;
+      instagram_authorized: number;
+      created_at: string;
+      vm_name: string;
+      adb_address: string | null;
+      vm_status: string;
+      libvirt_domain: string;
+    }>;
+
+    const vmStatusById = new Map<string, string>();
+    for (const row of rows) {
+      if (vmStatusById.has(row.vm_id)) continue;
+      let status = row.vm_status;
+      if (row.libvirt_domain && status !== 'creating' && status !== 'error') {
+        const real = this.vmManager.getDomainState(row.libvirt_domain);
+        if (real !== status) {
+          db.prepare('UPDATE vm SET status = ? WHERE id = ?').run(real, row.vm_id);
+          status = real;
+        }
+      }
+      vmStatusById.set(row.vm_id, status);
+    }
+    for (const row of rows) {
+      row.vm_status = vmStatusById.get(row.vm_id) ?? row.vm_status;
+      delete (row as { libvirt_domain?: string }).libvirt_domain;
+    }
+    return rows;
   }
 
   findOne(id: string) {
@@ -104,7 +158,7 @@ export class ProfilesService {
     if (r.changes === 0) throw new NotFoundException('Профиль не найден');
   }
 
-  getStreamUrl(id: string) {
+  getStreamUrl(id: string, req?: Request) {
     const row = this.db.getDb()
       .prepare(
         'SELECT pr.id, v.adb_address, v.libvirt_domain, v.mac FROM profile pr JOIN vm v ON v.id = pr.vm_id WHERE pr.id = ?',
@@ -139,9 +193,9 @@ export class ProfilesService {
       stream_port: streamPort,
       instruction: `Для просмотра экрана установите scrcpy и выполните: scrcpy -s ${adbAddress}`,
     };
-    const streamWebBase = process.env.STREAM_WEB_BASE?.trim();
+    const streamWebBase = resolveStreamWebBase(req);
     if (streamWebBase) {
-      const base = streamWebBase.replace(/\/$/, '');
+      const base = streamWebBase;
       // ws-scrcpy expects required params: action=stream, udid, player, ws (websocket url)
       // ws must point to ws-scrcpy websocket endpoint with action=proxy-adb.
       const httpUrl = new URL(base);

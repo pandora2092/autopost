@@ -108,7 +108,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/proxy" replace />} />
           <Route path="/proxy" element={<ProxySection proxies={proxies} onSave={loadProxies} onDelete={loadProxies} showToast={showToast} />} />
-          <Route path="/vm" element={<VmSection vms={vms} proxies={proxies} onSave={loadVms} onDelete={() => { loadVms(); loadProfiles(); }} showToast={showToast} />} />
+          <Route path="/vm" element={<VmSection vms={vms} proxies={proxies} onSave={() => { loadVms(); loadProfiles(); }} onDelete={() => { loadVms(); loadProfiles(); }} showToast={showToast} />} />
           <Route path="/profiles" element={<ProfilesSection profiles={profiles} vms={vms} onSave={loadProfiles} onDelete={() => { loadProfiles(); loadPosts(); }} showToast={showToast} />} />
           <Route path="/posts" element={<PostsSection posts={posts} profiles={profiles} onSave={() => { loadPosts(); loadQueue(); }} onCancel={() => { loadPosts(); loadQueue(); }} showToast={showToast} />} />
           <Route path="/queue" element={<QueueSection queue={queue} stats={stats} />} />

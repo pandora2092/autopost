@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { ProfilesService, CreateProfileDto, UpdateProfileDto } from './profiles.service';
 
 @Controller('api/profiles')
@@ -32,8 +33,8 @@ export class ProfilesController {
   }
 
   @Get(':id/stream-url')
-  getStreamUrl(@Param('id') id: string) {
-    return this.profilesService.getStreamUrl(id);
+  getStreamUrl(@Param('id') id: string, @Req() req: Request) {
+    return this.profilesService.getStreamUrl(id, req);
   }
 
   @Post(':id/clear-media')
