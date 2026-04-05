@@ -272,7 +272,8 @@ export class VmManagerService {
    * DISPLAY_DENSITY_SYNC_SETTINGS=0 — не писать в Settings (старый обход для кривых образов).
    * DISPLAY_DENSITY_FORCE_STOP_APPS=0 — не убивать процессы.
    * DISPLAY_DENSITY_FORCE_STOP_PACKAGES — свои пакеты через запятую.
-   * VK / YouTube DPI: VK_*, YOUTUBE_WM_DENSITY. Root: VK_DISPLAY_ADB_ROOT=0 отключает.
+   * VK: по умолчанию **210** DPI (как VK_WM_DENSITY=210); переопределение — VK_WM_DENSITY, расчёт от physical — VK_WM_DENSITY=auto.
+   * YouTube: YOUTUBE_WM_DENSITY (по умолчанию 120). Root: VK_DISPLAY_ADB_ROOT=0 отключает.
    */
   applyDisplayDensity(adbAddress: string, mode: 'default' | 'vk_larger' | 'youtube'): void {
     this.adbConnect(adbAddress);
@@ -337,12 +338,11 @@ export class VmManagerService {
       const ytRaw = (process.env.YOUTUBE_WM_DENSITY || '120').trim();
       target = /^\d+$/.test(ytRaw) ? parseInt(ytRaw, 10) : 120;
     } else {
-      const explicit = (process.env.VK_WM_DENSITY || '').trim();
-      if (/^\d+$/.test(explicit)) {
-        wmDensitySet('reset');
-        applyForcedSetting(null);
-        target = parseInt(explicit, 10);
-      } else {
+      wmDensitySet('reset');
+      applyForcedSetting(null);
+      const vkRaw = (process.env.VK_WM_DENSITY || '210').trim();
+      const vkLower = vkRaw.toLowerCase();
+      if (vkLower === 'auto' || vkLower === 'delta') {
         wmDensitySet('reset');
         applyForcedSetting(null);
         let { physical } = readWmDensity();
@@ -352,6 +352,15 @@ export class VmManagerService {
         const minDpi = parseInt(process.env.VK_DISPLAY_DENSITY_MIN || '72', 10);
         const maxDpi = parseInt(process.env.VK_DISPLAY_DENSITY_MAX || '800', 10);
         target = Math.max(minDpi, Math.min(maxDpi, physical + delta));
+      } else if (/^\d+$/.test(vkRaw)) {
+        wmDensitySet('reset');
+        applyForcedSetting(null);
+        target = parseInt(vkRaw, 10);
+      } else {
+        console.warn(logPrefix, 'VK_WM_DENSITY не число, используем 210:', vkRaw);
+        wmDensitySet('reset');
+        applyForcedSetting(null);
+        target = 210;
       }
     }
 
