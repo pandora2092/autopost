@@ -34,12 +34,22 @@ const HOME_TAB_WAIT_MS = parseInt(process.env.HOME_TAB_WAIT_MS || '20000', 10);
 const YOUTUBE_APP_ID = 'com.google.android.youtube';
 const YOUTUBE_HOME_ACTIVITY = 'com.google.android.youtube.app.honeycomb.Shell$HomeActivity';
 const VK_APP_ID = 'com.vkontakte.android';
-/** После Publish: успех — попап title «Clip published on profile» или экран загрузки clip_upload_title «Uploaded» / «Загружен». */
+/** Общий таймаут ожидания после Publish (шторка + запасной UI). */
 const VK_CLIP_UPLOAD_TIMEOUT_MS = parseInt(process.env.VK_CLIP_UPLOAD_TIMEOUT_MS || '1200000', 10);
-/** Опрос успеха VK (мс). Короткий попап — по умолчанию 25. VK_CLIP_SUCCESS_POLL_MS или VK_CLIP_UPLOAD_POLL_MS. */
+/** Пауза между циклами опроса (мс), пока не пора снова открыть шторку. VK_CLIP_SUCCESS_POLL_MS или VK_CLIP_UPLOAD_POLL_MS. */
 const VK_CLIP_SUCCESS_POLL_MS = parseInt(
   process.env.VK_CLIP_SUCCESS_POLL_MS || process.env.VK_CLIP_UPLOAD_POLL_MS || '25',
   10,
+);
+/**
+ * Если за это время в шторке ни разу не было «Clip uploading», разрешаем завершение по UI VK
+ * (попап / Uploaded), при условии что шторка сейчас пуста от этого уведомления.
+ */
+const VK_CLIP_UI_FALLBACK_AFTER_MS = parseInt(process.env.VK_CLIP_UI_FALLBACK_AFTER_MS || '120000', 10);
+/** Как часто открывать шторку для проверки (мс). Минимум 500. Env: VK_CLIP_SHADE_CHECK_INTERVAL_MS. */
+const VK_CLIP_SHADE_CHECK_INTERVAL_MS = Math.max(
+  500,
+  parseInt(process.env.VK_CLIP_SHADE_CHECK_INTERVAL_MS || '10000', 10),
 );
 /** Ожидание фоновой загрузки на YouTube после публикации (по UI «Uploading» / «Загрузка»). */
 const YOUTUBE_POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.YOUTUBE_POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
@@ -74,7 +84,7 @@ const INSTAGRAM_REELS_BB_OK_TIMEOUT_MS = parseInt(
  * Селекторы могут отличаться по версии приложения — при сбое обновите runYoutubeShortFlow.
  *
    * VK Clip: Create → Clip → видео в пикере по имени файла (picker_photo + content-desc) → Next ×2 →
-   * описание (clip_description_edit) → Edit → Publish → ожидание «Clip published on profile» или «Uploaded» (clip_upload_title).
+   * описание (clip_description_edit) → Edit → Publish → окончание загрузки в первую очередь по шторке (исчезновение «Clip uploading»).
    * См. runVkClipFlow.
  */
 
@@ -425,9 +435,98 @@ export class AppiumPublishService {
     await this.waitForKeepInstagramOpenPostingToFinish(driver, postId);
   }
 
+  private isVkClipUploadingNotificationText(text: string): boolean {
+    const t = text.toLowerCase().trim();
+    if (t.includes('clip') && t.includes('uploading')) return true;
+    if (t.includes('клип') && t.includes('загруз')) return true;
+    return false;
+  }
+
+  private async openAndroidNotificationShade(driver: WebdriverIO.Browser): Promise<void> {
+    const withCmd = driver as WebdriverIO.Browser & {
+      openNotifications?: () => Promise<void>;
+    };
+    if (typeof withCmd.openNotifications === 'function') {
+      await withCmd.openNotifications();
+      return;
+    }
+    await driver.execute('mobile: openNotifications' as never);
+  }
+
+  private async closeAndroidNotificationShade(driver: WebdriverIO.Browser): Promise<void> {
+    try {
+      const withKey = driver as WebdriverIO.Browser & { pressKeyCode?: (code: number) => Promise<void> };
+      if (typeof withKey.pressKeyCode === 'function') {
+        await withKey.pressKeyCode(4);
+      } else {
+        await driver.execute('mobile: pressKey' as never, { keycode: 4, isLongPress: false } as never);
+      }
+    } catch {
+      try {
+        await driver.back();
+      } catch {
+        /* empty */
+      }
+    }
+    await delay(400);
+  }
+
   /**
-   * VK: после Publish — успех по любому из вариантов:
-   * попап id/title «Clip published on profile», либо TextView clip_upload_title с text="Uploaded" (или «Загружен»).
+   * Шторка: ongoing-уведомление VK с заголовком «Clip uploading» (android:id/title) или аналог на русском.
+   */
+  private async isVkClipUploadingInNotificationShade(
+    driver: WebdriverIO.Browser,
+    postId: string,
+  ): Promise<boolean> {
+    this.publishCancelRegistry.throwIfCancelled(postId);
+    let openOk = false;
+    try {
+      await this.openAndroidNotificationShade(driver);
+      openOk = true;
+      await delay(600);
+      const titleXp = '//*[@resource-id="android:id/title"]';
+      try {
+        const els = await driver.$$(titleXp);
+        const n = await els.length;
+        for (let i = 0; i < n; i++) {
+          try {
+            if (!(await els[i].isDisplayed())) continue;
+            const t = (await els[i].getText()) || '';
+            if (this.isVkClipUploadingNotificationText(t)) return true;
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      const looseXp =
+        '//*[contains(@text, "Clip uploading") or contains(@text, "clip uploading")]';
+      try {
+        const loose = await driver.$$(looseXp);
+        const m = await loose.length;
+        for (let j = 0; j < m; j++) {
+          try {
+            if (await loose[j].isDisplayed()) return true;
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    } catch {
+      // Ошибка открытия/разбора шторки — не считаем, что «Clip uploading» точно исчез.
+      return true;
+    } finally {
+      if (openOk) await this.closeAndroidNotificationShade(driver);
+    }
+    return false;
+  }
+
+  /**
+   * VK: после Publish основной критерий — исчезновение из шторки уведомления «Clip uploading»
+   * (после того как оно хотя бы раз было видно). Запас: UI «Clip published…» / «Uploaded», если уведомления в шторке не было.
    */
   private async waitForVkClipPublishedSuccess(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(VK_CLIP_UPLOAD_TIMEOUT_MS > 0)) return;
@@ -435,16 +534,13 @@ export class AppiumPublishService {
     const publishedMarkers = ['Clip published on profile', 'Клип опубликован'];
     const titleXp = '//*[@resource-id="com.vkontakte.android:id/title"]';
     const clipUploadTitleXp = '//*[@resource-id="com.vkontakte.android:id/clip_upload_title"]';
-    /** Как в иерархии VK: TextView + clip_upload_title + text="Uploaded". */
     const clipUploadedExactXps = [
       '//*[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Uploaded"]',
       '//android.widget.TextView[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Uploaded"]',
       '//*[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Загружен"]',
       '//android.widget.TextView[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Загружен"]',
     ];
-    const poll = Math.max(10, VK_CLIP_SUCCESS_POLL_MS);
-    const quickPasses = 12;
-    const quickDelayMs = 8;
+    const stepDelay = Math.max(10, VK_CLIP_SUCCESS_POLL_MS);
 
     const textIsPublishedPopup = (text: string | undefined): boolean =>
       !!text && publishedMarkers.some((m) => text.includes(m));
@@ -504,30 +600,61 @@ export class AppiumPublishService {
       );
     };
 
-    while (Date.now() - startedAt < VK_CLIP_UPLOAD_TIMEOUT_MS) {
-      this.publishCancelRegistry.throwIfCancelled(postId);
-      for (let q = 0; q < quickPasses; q++) {
-        if (await tryAnyVkSuccessElement()) {
-          await delay(400);
-          return;
-        }
-        await delay(quickDelayMs);
-      }
-
+    const tryUiFallback = async (): Promise<boolean> => {
+      if (await tryAnyVkSuccessElement()) return true;
       try {
         const src = await driver.getPageSource();
-        if (src && pageSourceIndicatesSuccess(src)) {
-          await delay(400);
+        return !!(src && pageSourceIndicatesSuccess(src));
+      } catch {
+        return false;
+      }
+    };
+
+    let sawClipUploadingInShade = false;
+    let lastShadeCheckAt = 0;
+
+    while (Date.now() - startedAt < VK_CLIP_UPLOAD_TIMEOUT_MS) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      const now = Date.now();
+
+      if (now - lastShadeCheckAt >= VK_CLIP_SHADE_CHECK_INTERVAL_MS) {
+        lastShadeCheckAt = now;
+        const uploading = await this.isVkClipUploadingInNotificationShade(driver, postId);
+        if (uploading) sawClipUploadingInShade = true;
+        else if (sawClipUploadingInShade) {
+          await this.delayCancellable(postId, 400);
           return;
         }
-      } catch {
-        // ignore
       }
 
-      await delay(poll);
+      if (!sawClipUploadingInShade && now - startedAt >= VK_CLIP_UI_FALLBACK_AFTER_MS) {
+        if (await tryUiFallback()) {
+          const stillUploading = await this.isVkClipUploadingInNotificationShade(driver, postId);
+          if (!stillUploading) {
+            await this.delayCancellable(postId, 400);
+            return;
+          }
+        }
+      }
+
+      await this.delayCancellable(postId, stepDelay);
+    }
+
+    const shadeStillShows = await this.isVkClipUploadingInNotificationShade(driver, postId);
+    if (!shadeStillShows && sawClipUploadingInShade) {
+      await this.delayCancellable(postId, 400);
+      return;
+    }
+    if (shadeStillShows) {
+      throw new Error(
+        `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не исчезло уведомление «Clip uploading» в шторке (основной критерий завершения загрузки).`,
+      );
+    }
+    if (await tryUiFallback()) {
+      return;
     }
     throw new Error(
-      `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не появилось ни «Clip published on profile» (id/title), ни «Uploaded»/«Загружен» (clip_upload_title).`,
+      `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не было ни уведомления «Clip uploading» в шторке, ни успеха в интерфейсе приложения.`,
     );
   }
 
