@@ -30,7 +30,7 @@ const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '0',
 const YOUTUBE_APP_ID = 'com.google.android.youtube';
 const YOUTUBE_HOME_ACTIVITY = 'com.google.android.youtube.app.honeycomb.Shell$HomeActivity';
 const VK_APP_ID = 'com.vkontakte.android';
-/** После Publish: успех — попап с title «Clip published on profile» (исчезает быстро — нужен частый опрос). */
+/** После Publish: успех — попап title «Clip published on profile» или экран загрузки clip_upload_title «Uploaded» / «Загружен». */
 const VK_CLIP_UPLOAD_TIMEOUT_MS = parseInt(process.env.VK_CLIP_UPLOAD_TIMEOUT_MS || '1200000', 10);
 /** Опрос успеха VK (мс). Короткий попап — по умолчанию 25. VK_CLIP_SUCCESS_POLL_MS или VK_CLIP_UPLOAD_POLL_MS. */
 const VK_CLIP_SUCCESS_POLL_MS = parseInt(
@@ -56,16 +56,21 @@ const INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS = parseInt(
   process.env.INSTAGRAM_REELS_ORIGINAL_AUDIO_TIMEOUT_MS || '5000',
   10,
 );
+/** Шит «New ways to reuse» и аналоги: OK на bb_primary_action_container. Env: INSTAGRAM_REELS_BB_OK_TIMEOUT_MS. */
+const INSTAGRAM_REELS_BB_OK_TIMEOUT_MS = parseInt(
+  process.env.INSTAGRAM_REELS_BB_OK_TIMEOUT_MS || '4000',
+  10,
+);
 
 /**
  * Публикация Reel: Profile → Create New → Create new reel → выбор видео в галерее → Next (edit) →
- * при необходимости «Not now» на auxiliary_button / промо Edits («Get App» — тап выше шита) → подпись → Share или Next → при необходимости Share на шите original audio → About Reels: Share → Continue (privacy). Селекторы под версию Instagram.
+ * при необходимости «Not now» на auxiliary_button / промо Edits («Get App» — тап выше шита) → подпись → при необходимости OK (bb_primary_action_container) → Share или Next → при необходимости Share на шите original audio → About Reels: Share → Continue (privacy). Селекторы под версию Instagram.
  *
  * YouTube Shorts: Create → «Upload a video» → папка Download → видео → Next → подпись/описание → Publish.
  * Селекторы могут отличаться по версии приложения — при сбое обновите runYoutubeShortFlow.
  *
    * VK Clip: Create → Clip → видео в пикере по имени файла (picker_photo + content-desc) → Next ×2 →
-   * описание (clip_description_edit) → Edit → Publish → ожидание title «Clip published on profile».
+   * описание (clip_description_edit) → Edit → Publish → ожидание «Clip published on profile» или «Uploaded» (clip_upload_title).
    * См. runVkClipFlow.
  */
 
@@ -241,6 +246,46 @@ export class AppiumPublishService {
     } while (Date.now() < deadline);
   }
 
+  /**
+   * Bottom sheet вроде «New ways to reuse»: первичная кнопка OK (bb_primary_action_container, content-desc OK).
+   */
+  private async dismissInstagramReelsBbSheetOkIfPresent(
+    driver: WebdriverIO.Browser,
+    postId: string,
+    maxWaitMs?: number,
+  ): Promise<void> {
+    const limit = maxWaitMs ?? INSTAGRAM_REELS_BB_OK_TIMEOUT_MS;
+    const selectors = [
+      '//*[@resource-id="com.instagram.android:id/bb_primary_action_container"]',
+      'android=new UiSelector().resourceId("com.instagram.android:id/bb_primary_action_container")',
+      '~OK',
+      'android=new UiSelector().description("OK")',
+    ];
+    const pollMs = 350;
+    const tryClick = async (): Promise<boolean> => {
+      for (const sel of selectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            await delay(ACTION_DELAY_MS);
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
+    const deadline = Date.now() + (limit > 0 ? limit : 0);
+    do {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      if (await tryClick()) return;
+      if (limit <= 0) break;
+      await this.delayCancellable(postId, pollMs);
+    } while (Date.now() < deadline);
+  }
+
   /** Экран загрузки Reels: com.instagram.android:id/status_text — «Sharing to Reels…». */
   private async isSharingToReelsUiVisible(driver: WebdriverIO.Browser): Promise<boolean> {
     const statusSel = '//*[@resource-id="com.instagram.android:id/status_text"]';
@@ -298,30 +343,33 @@ export class AppiumPublishService {
   }
 
   /**
-   * VK: после Publish — ловим короткий попап: title «Clip published on profile».
-   * Серия быстрых опросов по id/title (легче, чем getPageSource), затем снимок разметки.
+   * VK: после Publish — успех по любому из вариантов:
+   * попап id/title «Clip published on profile» (или «Клип опубликован»), либо clip_upload_title «Uploaded» / «Загружен».
    */
   private async waitForVkClipPublishedSuccess(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(VK_CLIP_UPLOAD_TIMEOUT_MS > 0)) return;
     const startedAt = Date.now();
-    const pageMarkers = ['Clip published on profile', 'Клип опубликован'];
+    const publishedMarkers = ['Clip published on profile', 'Клип опубликован'];
     const titleXp = '//*[@resource-id="com.vkontakte.android:id/title"]';
+    const clipUploadTitleXp = '//*[@resource-id="com.vkontakte.android:id/clip_upload_title"]';
     const poll = Math.max(10, VK_CLIP_SUCCESS_POLL_MS);
     const quickPasses = 12;
     const quickDelayMs = 8;
 
-    const textIsSuccess = (text: string | undefined): boolean =>
-      !!text && pageMarkers.some((m) => text.includes(m));
+    const textIsPublishedPopup = (text: string | undefined): boolean =>
+      !!text && publishedMarkers.some((m) => text.includes(m));
 
-    const tryTitleElements = async (): Promise<boolean> => {
+    const textIsUploadedScreen = (text: string | undefined): boolean =>
+      !!text && (text.includes('Uploaded') || text.includes('Загружен'));
+
+    const tryElementsByXp = async (xp: string, match: (t: string) => boolean): Promise<boolean> => {
       try {
-        const els = await driver.$$(titleXp);
+        const els = await driver.$$(xp);
         const n = await els.length;
         for (let i = 0; i < n; i++) {
-          const el = els[i];
           try {
-            const t = (await el.getText()) || '';
-            if (textIsSuccess(t)) return true;
+            const t = (await els[i].getText()) || '';
+            if (match(t)) return true;
           } catch {
             continue;
           }
@@ -332,10 +380,27 @@ export class AppiumPublishService {
       return false;
     };
 
+    const tryAnyVkSuccessElement = async (): Promise<boolean> => {
+      if (await tryElementsByXp(titleXp, textIsPublishedPopup)) return true;
+      if (await tryElementsByXp(clipUploadTitleXp, textIsUploadedScreen)) return true;
+      return false;
+    };
+
+    const pageSourceIndicatesSuccess = (src: string): boolean => {
+      if (publishedMarkers.some((m) => src.includes(m))) return true;
+      if (!src.includes('clip_upload_title')) return false;
+      return (
+        src.includes('text="Uploaded"') ||
+        src.includes('text="Загружен"') ||
+        src.includes("text='Uploaded'") ||
+        src.includes("text='Загружен'")
+      );
+    };
+
     while (Date.now() - startedAt < VK_CLIP_UPLOAD_TIMEOUT_MS) {
       this.publishCancelRegistry.throwIfCancelled(postId);
       for (let q = 0; q < quickPasses; q++) {
-        if (await tryTitleElements()) {
+        if (await tryAnyVkSuccessElement()) {
           await delay(400);
           return;
         }
@@ -344,7 +409,7 @@ export class AppiumPublishService {
 
       try {
         const src = await driver.getPageSource();
-        if (src && pageMarkers.some((m) => src.includes(m))) {
+        if (src && pageSourceIndicatesSuccess(src)) {
           await delay(400);
           return;
         }
@@ -355,7 +420,7 @@ export class AppiumPublishService {
       await delay(poll);
     }
     throw new Error(
-      `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не появилось сообщение «Clip published on profile» (попап id/title или разметка).`,
+      `VK: за ${VK_CLIP_UPLOAD_TIMEOUT_MS}мс не появилось ни «Clip published on profile» (id/title), ни «Uploaded»/«Загружен» (clip_upload_title).`,
     );
   }
 
@@ -906,6 +971,9 @@ export class AppiumPublishService {
 
       await delay(ACTION_DELAY_MS);
 
+      // 6b. Шит «New ways to reuse» и т.п. может перекрыть экран подписи — OK перед Share/Next.
+      await this.dismissInstagramReelsBbSheetOkIfPresent(driver, post.id);
+
       // 7. Экран подписи: чаще всего сразу Share (share_button); иначе Next → шит original audio с отдельным Share.
       const shareButtonSelectors = [
         '//*[@resource-id="com.instagram.android:id/share_button" and (contains(@content-desc,"Share") or contains(@content-desc,"Поделиться"))]',
@@ -939,11 +1007,20 @@ export class AppiumPublishService {
       }
       await delay(ACTION_DELAY_MS);
 
+      // 7a. Тот же OK-шит может появиться после первого Share/Next на подписи.
+      await this.dismissInstagramReelsBbSheetOkIfPresent(driver, post.id);
+
       // 7b. Шит «Update on your original audio» (после Next на подписи): Share на clips_original_audio_nux_sheet_share_button.
       await this.clickInstagramReelsOriginalAudioSheetShareIfPresent(driver, post.id);
 
+      // 7c. OK снова после промежуточных шитов (редко).
+      await this.dismissInstagramReelsBbSheetOkIfPresent(driver, post.id, 0);
+
       // 8. Модалка «About Reels»: Share (clips_nux_sheet_share_button). Резерв: original audio, если шит открылся с задержкой.
       const aboutReelsShareSelectors = [
+        '//*[@resource-id="com.instagram.android:id/bb_primary_action_container"]',
+        'android=new UiSelector().resourceId("com.instagram.android:id/bb_primary_action_container")',
+        '~OK',
         '//*[@resource-id="com.instagram.android:id/clips_original_audio_nux_sheet_share_button"]',
         'android=new UiSelector().resourceId("com.instagram.android:id/clips_original_audio_nux_sheet_share_button")',
         '//*[@resource-id="com.instagram.android:id/clips_nux_sheet_share_button"]',
@@ -963,6 +1040,8 @@ export class AppiumPublishService {
           continue;
         }
       }
+
+      await this.dismissInstagramReelsBbSheetOkIfPresent(driver, post.id, 0);
 
       // 9. Диалог «Others can now download...»: кнопка Continue (clips_download_privacy_nux_button).
       const continueSelectors = [
@@ -1532,7 +1611,7 @@ export class AppiumPublishService {
 
   /**
    * VK: клип — Create → Clip → выбор видео по basename в content-desc у picker_photo → Next → Next →
-   * подпись → Edit → Publish → ожидание «Clip published on profile» (id/title).
+   * подпись → Edit → Publish → ожидание «Clip published on profile» или «Uploaded» (clip_upload_title).
    */
   private async runVkClipFlow(
     driver: WebdriverIO.Browser,
