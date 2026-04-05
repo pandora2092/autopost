@@ -13,19 +13,23 @@ const REMOTE_DIR = process.env.REMOTE_MEDIA_DIR || '/sdcard/Download';
 const APPIUM_HOST = process.env.APPIUM_HOST || '127.0.0.1';
 const APPIUM_PORT = parseInt(process.env.APPIUM_PORT || '4723', 10);
 /**
- * После появления «Sharing to Reels…» — максимум времени на исчезновение (фоновая загрузка).
+ * После появления баннера «Keep Instagram open to finish posting…» на Home — максимум времени на исчезновение.
  * По умолчанию 20 минут.
  */
 const POST_PUBLISH_TIMEOUT_MS = parseInt(process.env.POST_PUBLISH_TIMEOUT_MS || '1200000', 10);
-/** Сколько ждать появления текста «Sharing to Reels» (status_text) после Share/Continue. */
-const SHARING_TO_REELS_APPEAR_TIMEOUT_MS = parseInt(
-  process.env.SHARING_TO_REELS_APPEAR_TIMEOUT_MS || '120000',
+/** Сколько ждать появления баннера на ленте после перехода на Home. */
+const KEEP_INSTAGRAM_OPEN_APPEAR_TIMEOUT_MS = parseInt(
+  process.env.KEEP_INSTAGRAM_OPEN_APPEAR_TIMEOUT_MS || '120000',
   10,
 );
 /** Интервал опроса индикатора загрузки. */
 const POST_PUBLISH_POLL_MS = parseInt(process.env.POST_PUBLISH_POLL_MS || '3000', 10);
 /** Доп. пауза после завершения загрузки (на всякий случай). */
 const POST_PUBLISH_DELAY_MS = parseInt(process.env.POST_PUBLISH_DELAY_MS || '0', 10);
+/** Пауза на ленте Home перед поиском баннера «Keep Instagram open…». */
+const POST_PUBLISH_HOME_DELAY_MS = parseInt(process.env.POST_PUBLISH_HOME_DELAY_MS || '5000', 10);
+/** Ожидание появления вкладки Home после публикации. */
+const HOME_TAB_WAIT_MS = parseInt(process.env.HOME_TAB_WAIT_MS || '20000', 10);
 
 const YOUTUBE_APP_ID = 'com.google.android.youtube';
 const YOUTUBE_HOME_ACTIVITY = 'com.google.android.youtube.app.honeycomb.Shell$HomeActivity';
@@ -286,60 +290,119 @@ export class AppiumPublishService {
     } while (Date.now() < deadline);
   }
 
-  /** Экран загрузки Reels: com.instagram.android:id/status_text — «Sharing to Reels…». */
-  private async isSharingToReelsUiVisible(driver: WebdriverIO.Browser): Promise<boolean> {
-    const statusSel = '//*[@resource-id="com.instagram.android:id/status_text"]';
+  /** Баннер на Home: «Keep Instagram open to finish posting…» (лента / row_pending_media_*). */
+  private async isKeepInstagramOpenPostingVisible(driver: WebdriverIO.Browser): Promise<boolean> {
     try {
-      const el = await driver.$(statusSel);
-      if (!el || !(await el.isDisplayed())) return false;
-      const text = ((await el.getText()) || '').toLowerCase();
-      return text.includes('sharing') && text.includes('reel');
+      const withText = await driver.$$('//*[contains(@text, "Instagram open") or contains(@text, "instagram open")]');
+      const n = await withText.length;
+      for (let i = 0; i < n; i++) {
+        try {
+          const el = withText[i];
+          if (!(await el.isDisplayed())) continue;
+          const text = ((await el.getText()) || '').toLowerCase();
+          if (text.includes('keep instagram open') && text.includes('finish') && text.includes('posting')) {
+            return true;
+          }
+        } catch {
+          continue;
+        }
+      }
     } catch {
-      return false;
+      // ignore
     }
+    const progressBarSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_progress_bar"]';
+    const statusContainerSel = '//*[@resource-id="com.instagram.android:id/row_pending_media_status_container"]';
+    try {
+      const pb = await driver.$(progressBarSel);
+      if (pb && (await pb.isDisplayed())) return true;
+    } catch {
+      // ignore
+    }
+    try {
+      const container = await driver.$(statusContainerSel);
+      if (container && (await container.isDisplayed())) return true;
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  /** Вкладка Home (лента) после публикации. */
+  private async openHomeTab(driver: WebdriverIO.Browser, postId: string): Promise<void> {
+    const homeTabSelectors = [
+      '//*[@resource-id="com.instagram.android:id/feed_tab"]',
+      '//*[@content-desc="Home"][@resource-id="com.instagram.android:id/feed_tab"]',
+      '//*[@content-desc="Home"]',
+      '~Home',
+      'android=new UiSelector().resourceId("com.instagram.android:id/feed_tab")',
+      'android=new UiSelector().description("Home")',
+      '//*[@resource-id="com.instagram.android:id/feed_tab"]//*[@resource-id="com.instagram.android:id/tab_icon"]',
+    ];
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < HOME_TAB_WAIT_MS) {
+      this.publishCancelRegistry.throwIfCancelled(postId);
+      for (const sel of homeTabSelectors) {
+        try {
+          const el = await driver.$(sel);
+          if (el && (await el.isDisplayed())) {
+            await el.click();
+            await this.delayCancellable(postId, 2000);
+            return;
+          }
+        } catch {
+          continue;
+        }
+      }
+      await this.delayCancellable(postId, 2000);
+    }
+    throw new Error(
+      `Не удалось открыть вкладку Home после публикации за ${HOME_TAB_WAIT_MS}мс. Селекторы: feed_tab, content-desc="Home".`,
+    );
   }
 
   /**
-   * После Share/Continue: ждём появления «Sharing to Reels…», затем — пока блок загрузки не исчезнет.
+   * После Share/Continue: Home → пауза → ждём баннер «Keep Instagram open to finish posting…», затем исчезновение.
    */
-  private async waitForSharingToReelsToFinish(driver: WebdriverIO.Browser, postId: string): Promise<void> {
+  private async waitForKeepInstagramOpenPostingToFinish(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
 
     const startedAt = Date.now();
-    let seenSharing = false;
+    let seenBanner = false;
     let firstSeenAt: number | null = null;
 
     while (true) {
       this.publishCancelRegistry.throwIfCancelled(postId);
       const now = Date.now();
-      const visible = await this.isSharingToReelsUiVisible(driver);
+      const visible = await this.isKeepInstagramOpenPostingVisible(driver);
 
       if (visible) {
         if (firstSeenAt === null) firstSeenAt = now;
-        seenSharing = true;
-      } else if (seenSharing) {
+        seenBanner = true;
+      } else if (seenBanner) {
         return;
       }
 
-      if (!seenSharing) {
-        if (now - startedAt >= SHARING_TO_REELS_APPEAR_TIMEOUT_MS) {
+      if (!seenBanner) {
+        if (now - startedAt >= KEEP_INSTAGRAM_OPEN_APPEAR_TIMEOUT_MS) {
           throw new Error(
-            `Не появился индикатор «Sharing to Reels…» (com.instagram.android:id/status_text) за ${SHARING_TO_REELS_APPEAR_TIMEOUT_MS}мс.`,
+            `Не появился баннер «Keep Instagram open to finish posting…» на Home за ${KEEP_INSTAGRAM_OPEN_APPEAR_TIMEOUT_MS}мс.`,
           );
         }
       } else if (firstSeenAt !== null && now - firstSeenAt >= POST_PUBLISH_TIMEOUT_MS) {
         throw new Error(
-          `Instagram не завершил загрузку Reels за ${POST_PUBLISH_TIMEOUT_MS}мс после появления индикатора (текст «Sharing to Reels…» всё ещё виден).`,
+          `Instagram не завершил публикацию за ${POST_PUBLISH_TIMEOUT_MS}мс после появления баннера (индикатор всё ещё виден).`,
         );
       }
 
-      await delay(Math.max(250, POST_PUBLISH_POLL_MS));
+      await this.delayCancellable(postId, Math.max(250, POST_PUBLISH_POLL_MS));
     }
   }
 
-  /** После Share/Continue: ожидание завершения фоновой публикации Reels по UI «Sharing to Reels…». */
+  /** После Share/Continue: переход на Home и ожидание исчезновения баннера «Keep Instagram open…». */
   private async waitForPublishCompletion(driver: WebdriverIO.Browser, postId: string): Promise<void> {
-    await this.waitForSharingToReelsToFinish(driver, postId);
+    await this.openHomeTab(driver, postId);
+    await this.delayCancellable(postId, POST_PUBLISH_HOME_DELAY_MS);
+    await this.waitForKeepInstagramOpenPostingToFinish(driver, postId);
   }
 
   /**
