@@ -327,6 +327,25 @@ export class AppiumPublishService {
     return false;
   }
 
+  /**
+   * Перед Home иногда показывается оверлей/модалка — закрытие тапом по верхней трети экрана (выше середины).
+   */
+  private async dismissInstagramPostPublishOverlayIfPresent(
+    driver: WebdriverIO.Browser,
+    postId: string,
+  ): Promise<void> {
+    this.publishCancelRegistry.throwIfCancelled(postId);
+    try {
+      const { width, height } = await driver.getWindowSize();
+      const x = Math.floor(width / 2);
+      const y = Math.floor(height / 6);
+      await driver.execute('mobile: clickGesture', { x, y });
+      await this.delayCancellable(postId, 1500);
+    } catch {
+      // Окна нет, другой драйвер или жест недоступен — идём дальше
+    }
+  }
+
   /** Вкладка Home (лента) после публикации. */
   private async openHomeTab(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     const homeTabSelectors = [
@@ -361,7 +380,7 @@ export class AppiumPublishService {
   }
 
   /**
-   * После Share/Continue: Home → пауза → ждём баннер «Keep Instagram open to finish posting…», затем исчезновение.
+   * После Share/Continue: пауза → ждём баннер «Keep Instagram open to finish posting…», затем исчезновение.
    */
   private async waitForKeepInstagramOpenPostingToFinish(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(POST_PUBLISH_TIMEOUT_MS > 0)) return;
@@ -398,8 +417,9 @@ export class AppiumPublishService {
     }
   }
 
-  /** После Share/Continue: переход на Home и ожидание исчезновения баннера «Keep Instagram open…». */
+  /** После Share/Continue: тап по верхней трети (закрыть окно) → Home → пауза → баннер «Keep Instagram open…». */
   private async waitForPublishCompletion(driver: WebdriverIO.Browser, postId: string): Promise<void> {
+    await this.dismissInstagramPostPublishOverlayIfPresent(driver, postId);
     await this.openHomeTab(driver, postId);
     await this.delayCancellable(postId, POST_PUBLISH_HOME_DELAY_MS);
     await this.waitForKeepInstagramOpenPostingToFinish(driver, postId);
