@@ -427,7 +427,7 @@ export class AppiumPublishService {
 
   /**
    * VK: после Publish — успех по любому из вариантов:
-   * попап id/title «Clip published on profile» (или «Клип опубликован»), либо clip_upload_title «Uploaded» / «Загружен».
+   * попап id/title «Clip published on profile», либо TextView clip_upload_title с text="Uploaded" (или «Загружен»).
    */
   private async waitForVkClipPublishedSuccess(driver: WebdriverIO.Browser, postId: string): Promise<void> {
     if (!(VK_CLIP_UPLOAD_TIMEOUT_MS > 0)) return;
@@ -435,6 +435,13 @@ export class AppiumPublishService {
     const publishedMarkers = ['Clip published on profile', 'Клип опубликован'];
     const titleXp = '//*[@resource-id="com.vkontakte.android:id/title"]';
     const clipUploadTitleXp = '//*[@resource-id="com.vkontakte.android:id/clip_upload_title"]';
+    /** Как в иерархии VK: TextView + clip_upload_title + text="Uploaded". */
+    const clipUploadedExactXps = [
+      '//*[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Uploaded"]',
+      '//android.widget.TextView[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Uploaded"]',
+      '//*[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Загружен"]',
+      '//android.widget.TextView[@resource-id="com.vkontakte.android:id/clip_upload_title" and @text="Загружен"]',
+    ];
     const poll = Math.max(10, VK_CLIP_SUCCESS_POLL_MS);
     const quickPasses = 12;
     const quickDelayMs = 8;
@@ -442,8 +449,24 @@ export class AppiumPublishService {
     const textIsPublishedPopup = (text: string | undefined): boolean =>
       !!text && publishedMarkers.some((m) => text.includes(m));
 
-    const textIsUploadedScreen = (text: string | undefined): boolean =>
-      !!text && (text.includes('Uploaded') || text.includes('Загружен'));
+    const textIsUploadedScreen = (text: string | undefined): boolean => {
+      if (!text) return false;
+      const t = text.trim();
+      return t === 'Uploaded' || t === 'Загружен' || t.includes('Uploaded') || t.includes('Загружен');
+    };
+
+    const tryClipUploadedExact = async (): Promise<boolean> => {
+      for (const xp of clipUploadedExactXps) {
+        try {
+          const el = await driver.$(xp);
+          const t = (await el.getText()) || '';
+          if (textIsUploadedScreen(t)) return true;
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    };
 
     const tryElementsByXp = async (xp: string, match: (t: string) => boolean): Promise<boolean> => {
       try {
@@ -464,6 +487,7 @@ export class AppiumPublishService {
     };
 
     const tryAnyVkSuccessElement = async (): Promise<boolean> => {
+      if (await tryClipUploadedExact()) return true;
       if (await tryElementsByXp(titleXp, textIsPublishedPopup)) return true;
       if (await tryElementsByXp(clipUploadTitleXp, textIsUploadedScreen)) return true;
       return false;
