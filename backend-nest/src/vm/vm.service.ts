@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, HttpException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { VmManagerService } from './vm-manager.service';
 import { v4 as uuidv4 } from 'uuid';
@@ -86,8 +86,8 @@ export class VmService {
     } catch (err) {
       const text = this.getErrorText(err);
       if (this.isNotEnoughPoolSpaceError(text)) {
-        // 507 Insufficient Storage — ближе всего к "не хватает места на пуле"
-        throw new HttpException('Недостаточно места для создания VM (не хватает места в пуле).', HttpStatus.INSUFFICIENT_STORAGE);
+        // 507 Insufficient Storage (в этой версии NestJS нет HttpStatus.INSUFFICIENT_STORAGE)
+        throw new HttpException('Недостаточно места для создания VM (не хватает места в пуле).', 507);
       }
       // Если частично успел создаться домен/диски — попробуем убрать, чтобы не оставлять мусор.
       try {
