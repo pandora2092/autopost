@@ -8,6 +8,11 @@ export class VmManagerService {
   private readonly scriptsDir =
     process.env.SCRIPTS_DIR || path.resolve(__dirname, '../../../scripts');
   private readonly templateDomain = process.env.VM_TEMPLATE_DOMAIN || 'android-template';
+  /**
+   * Явный URI для libvirt/virsh.
+   * Иначе virsh может подключаться к qemu:///session и "не видеть" домены из qemu:///system.
+   */
+  private readonly libvirtUri = process.env.VM_LIBVIRT_URI || process.env.LIBVIRT_DEFAULT_URI || 'qemu:///system';
 
   /** После смены density перезапускаем процессы — иначе VK/YouTube держат старый Configuration. */
   private readonly densityAwarePackagesDefault = [
@@ -17,7 +22,11 @@ export class VmManagerService {
   ] as const;
 
   private run(cmd: string, options: { timeout?: number } = {}) {
-    return execSync(cmd, { encoding: 'utf8', timeout: options.timeout ?? 120000 });
+    return execSync(cmd, {
+      encoding: 'utf8',
+      timeout: options.timeout ?? 120000,
+      env: { ...process.env, LIBVIRT_DEFAULT_URI: this.libvirtUri },
+    });
   }
 
   /** adb shell <args...> без исключения при ненулевом коде (для wm/settings). */

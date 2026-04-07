@@ -11,6 +11,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   );
   const [name, setName] = useState('');
   const [proxyId, setProxyId] = useState('');
+  const [isCreatingVm, setIsCreatingVm] = useState(false);
   const [configuringVmId, setConfiguringVmId] = useState(null);
   const [configResultPopup, setConfigResultPopup] = useState({ visible: false, items: [], vmName: '', vmId: null });
   const [deleteConfirmPopup, setDeleteConfirmPopup] = useState({ visible: false, vmId: null, vmName: '' });
@@ -32,11 +33,22 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
   const [installingYoutubeId, setInstallingYoutubeId] = useState(null);
   const [installingVkId, setInstallingVkId] = useState(null);
 
+  const isNotEnoughPoolSpaceWarning = (message) => {
+    const m = String(message || '');
+    return (
+      m.includes('The requested volume capacity will exceed the available pool space') ||
+      m.includes('requested volume capacity will exceed') ||
+      m.includes('available pool space when the volume is fully allocated')
+    );
+  };
+
   const handleSave = async () => {
+    if (isCreatingVm) return;
     if (!name?.trim()) {
       showToast('Введите имя VM', 'error');
       return;
     }
+    setIsCreatingVm(true);
     try {
       await vmApi.create({ name: name.trim(), proxy_id: proxyId || undefined });
       showToast('VM создаётся…', 'success');
@@ -45,7 +57,13 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
       setProxyId('');
       onSave();
     } catch (e) {
-      showToast(e.message, 'error');
+      if (isNotEnoughPoolSpaceWarning(e?.message)) {
+        showToast('Недостаточно места для создания VM (не хватает места в пуле дисков).', 'error');
+      } else {
+        showToast(e.message, 'error');
+      }
+    } finally {
+      setIsCreatingVm(false);
     }
   };
 
@@ -334,7 +352,9 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
     <section className="card">
       <h2>Виртуальные машины</h2>
       <div className="card-actions">
-        <button type="button" className="btn primary" onClick={() => setShowForm(true)}>Создать VM</button>
+        <button type="button" className="btn primary" onClick={() => setShowForm(true)} disabled={isCreatingVm}>
+          Создать VM
+        </button>
       </div>
       {showForm && (
         <div className="post-form card-inner">
@@ -346,6 +366,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
               placeholder="Латиница без пробелов"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              disabled={isCreatingVm}
             />
           </div>
           <div className="post-form-row">
@@ -354,6 +375,7 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
               value={proxyId}
               onChange={(e) => setProxyId(e.target.value)}
               className="post-form-input-wide"
+              disabled={isCreatingVm}
             >
               <option value="">— Прокси (опц.) —</option>
               {proxies.map((p) => (
@@ -362,8 +384,24 @@ export default function VmSection({ vms, proxies, onSave, onDelete, showToast })
             </select>
           </div>
           <div className="post-form-actions">
-            <button type="button" className="btn primary" onClick={handleSave}>Создать</button>
-            <button type="button" className="btn" onClick={() => setShowForm(false)}>Отмена</button>
+            <button type="button" className="btn primary" onClick={handleSave} disabled={isCreatingVm}>
+              {isCreatingVm ? (
+                <>
+                  <span className="loader-spinner" aria-hidden="true" />
+                  Создаём…
+                </>
+              ) : (
+                'Создать'
+              )}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowForm(false)}
+              disabled={isCreatingVm}
+            >
+              Отмена
+            </button>
           </div>
         </div>
       )}
