@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { VmManagerService } from './vm-manager.service';
 import { v4 as uuidv4 } from 'uuid';
@@ -20,6 +20,23 @@ export class VmService {
     private readonly db: DatabaseService,
     private readonly vmManager: VmManagerService,
   ) {}
+
+  private isNotEnoughPoolSpaceError(text: string): boolean {
+    const t = (text || '').toLowerCase();
+    return (
+      t.includes('requested volume capacity will exceed the available pool space') ||
+      (t.includes('requested capacity') && t.includes('available') && t.includes('pool space'))
+    );
+  }
+
+  private getErrorText(err: unknown): string {
+    if (!err) return '';
+    const e = err as { message?: unknown; stderr?: unknown; stdout?: unknown };
+    const parts = [e.message, e.stderr, e.stdout]
+      .map((v) => (typeof v === 'string' ? v : ''))
+      .filter(Boolean);
+    return parts.join('\n');
+  }
 
   findAll() {
     const db = this.db.getDb();
@@ -58,18 +75,24 @@ export class VmService {
     const db = this.db.getDb();
     const existing = db.prepare('SELECT id FROM vm WHERE name = ? OR libvirt_domain = ?').get(libvirtName, libvirtName);
     if (existing) throw new ConflictException('VM с таким именем уже существует');
-    const id = uuidv4();
-    db.prepare(
-      'INSERT INTO vm (id, name, libvirt_domain, mac, proxy_id, status) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(id, libvirtName, libvirtName, null, dto.proxy_id ?? null, 'creating');
-    const vmRow = db.prepare('SELECT * FROM vm WHERE libvirt_domain = ?').get(libvirtName) as { id: string };
     try {
       const newMac = dto.mac || this.vmManager.generateMac();
       const { mac: createdMac } = this.vmManager.cloneVm(libvirtName, newMac);
-      db.prepare('UPDATE vm SET mac = ?, status = ? WHERE id = ?').run(createdMac, 'stopped', vmRow.id);
-      return this.findOne(vmRow.id);
+      const id = uuidv4();
+      db.prepare(
+        'INSERT INTO vm (id, name, libvirt_domain, mac, proxy_id, status) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(id, libvirtName, libvirtName, createdMac || null, dto.proxy_id ?? null, 'stopped');
+      return this.findOne(id);
     } catch (err) {
-      db.prepare('UPDATE vm SET status = ? WHERE id = ?').run('error', vmRow.id);
+      const text = this.getErrorText(err);
+      if (this.isNotEnoughPoolSpaceError(text)) {
+        // 507 Insufficient Storage — ближе всего к "не хватает места на пуле"
+        throw new HttpException('Недостаточно места для создания VM (не хватает места в пуле).', HttpStatus.INSUFFICIENT_STORAGE);
+      }
+      // Если частично успел создаться домен/диски — попробуем убрать, чтобы не оставлять мусор.
+      try {
+        this.vmManager.removeVm(libvirtName);
+      } catch (_) {}
       throw err;
     }
   }
